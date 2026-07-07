@@ -28,3 +28,8 @@ app.use("/api/employees", employeesRouter);
 app.use("/api/settings", settingsRouter);
 
 app.use(errorHandler);
+
+// Vercel's Express framework preset auto-detects src/app as the function
+// entry and requires a default export (the named export above is what
+// api/index.ts and the local dev server use).
+export default app;
