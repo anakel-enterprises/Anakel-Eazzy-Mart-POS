@@ -1,0 +1,206 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Every business table carries storeId even though Phase 1 only ever runs a
+// single Store row. That keeps a future multi-store rollout a config change
+// instead of a data migration.
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  CASHIER
+}
+
+enum PaymentMethod {
+  CASH
+  MPESA
+  CARD
+  BANK
+  SPLIT
+  CREDIT
+}
+
+enum SaleStatus {
+  HELD
+  COMPLETED
+  VOIDED
+  REFUNDED
+}
+
+enum RegisterSessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum StockAdjustmentReason {
+  RECEIVED_STOCK
+  DAMAGE
+  THEFT_LOSS
+  RECOUNT
+  MANUAL_CORRECTION
+}
+
+model Store {
+  id        String   @id @default(cuid())
+  name      String
+  address   String?
+  phone     String?
+  currency  String   @default("KES")
+  taxRate   Decimal  @default(16) @db.Decimal(5, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  categories        Category[]
+  products          Product[]
+  sales             Sale[]
+  registerSessions  CashRegisterSession[]
+  stockAdjustments  StockAdjustment[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  storeId      String
+  store        Store    @relation(fields: [storeId], references: [id])
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(CASHIER)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sales            Sale[]
+  registerSessions CashRegisterSession[]
+  stockAdjustments StockAdjustment[]
+
+  @@index([storeId])
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id])
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@unique([storeId, name])
+  @@index([storeId])
+}
+
+model Product {
+  id         String   @id @default(cuid())
+  storeId    String
+  store      Store    @relation(fields: [storeId], references: [id])
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+  name       String
+  sku        String
+  barcode    String?
+  price      Decimal  @db.Decimal(12, 2)
+  cost       Decimal? @db.Decimal(12, 2)
+  stockQty   Int      @default(0)
+  lowStockThreshold Int @default(5)
+  imageUrl   String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  saleItems        SaleItem[]
+  stockAdjustments StockAdjustment[]
+
+  @@unique([storeId, sku])
+  @@index([storeId])
+  @@index([storeId, barcode])
+}
+
+model Sale {
+  id         String     @id @default(cuid())
+  storeId    String
+  store      Store      @relation(fields: [storeId], references: [id])
+  cashierId  String
+  cashier    User       @relation(fields: [cashierId], references: [id])
+  registerSessionId String?
+  registerSession   CashRegisterSession? @relation(fields: [registerSessionId], references: [id])
+
+  // Client-generated id so an offline sale keeps a stable identity through sync.
+  clientId   String     @unique
+
+  status     SaleStatus @default(COMPLETED)
+  subtotal   Decimal    @db.Decimal(12, 2)
+  taxTotal   Decimal    @db.Decimal(12, 2)
+  total      Decimal    @db.Decimal(12, 2)
+  amountTendered Decimal? @db.Decimal(12, 2)
+  changeDue  Decimal?   @db.Decimal(12, 2)
+  paymentMethod PaymentMethod @default(CASH)
+
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  syncedAt   DateTime   @default(now())
+
+  items    SaleItem[]
+
+  @@index([storeId])
+  @@index([storeId, createdAt])
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  name      String
+  unitPrice Decimal @db.Decimal(12, 2)
+  quantity  Int
+  lineTotal Decimal @db.Decimal(12, 2)
+
+  @@index([saleId])
+}
+
+model CashRegisterSession {
+  id             String                @id @default(cuid())
+  storeId        String
+  store          Store                 @relation(fields: [storeId], references: [id])
+  cashierId      String
+  cashier        User                  @relation(fields: [cashierId], references: [id])
+  status         RegisterSessionStatus @default(OPEN)
+  openingFloat   Decimal               @db.Decimal(12, 2)
+  closingCounted Decimal?              @db.Decimal(12, 2)
+  expectedCash   Decimal?              @db.Decimal(12, 2)
+  variance       Decimal?              @db.Decimal(12, 2)
+  openedAt       DateTime              @default(now())
+  closedAt       DateTime?
+  notes          String?
+
+  sales Sale[]
+
+  @@index([storeId])
+}
+
+model StockAdjustment {
+  id         String                 @id @default(cuid())
+  storeId    String
+  store      Store                  @relation(fields: [storeId], references: [id])
+  productId  String
+  product    Product                @relation(fields: [productId], references: [id])
+  userId     String
+  user       User                   @relation(fields: [userId], references: [id])
+  reason     StockAdjustmentReason
+  quantityDelta Int
+  notes      String?
+  createdAt  DateTime               @default(now())
+
+  @@index([storeId])
+  @@index([productId])
+}

@@ -1,0 +1,228 @@
+import { useEffect, useMemo, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { localDb, newClientId, type CachedProduct } from "../db/localDb";
+import { queueSale, refreshProductCache } from "../lib/sync";
+import { Topbar } from "../components/Topbar";
+import { Button, Card } from "../components/ui";
+
+interface CartLine {
+  product: CachedProduct;
+  quantity: number;
+}
+
+const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
+const PAYMENT_METHODS = ["CASH", "MPESA", "CARD", "BANK", "CREDIT"] as const;
+
+export function Checkout() {
+  const [query, setQuery] = useState("");
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [paymentMethod, setPaymentMethod] = useState<(typeof PAYMENT_METHODS)[number]>("CASH");
+  const [amountTendered, setAmountTendered] = useState("");
+  const [receipt, setReceipt] = useState<{ total: number; change: number } | null>(null);
+
+  useEffect(() => {
+    if (navigator.onLine) void refreshProductCache();
+  }, []);
+
+  const results = useLiveQuery(async () => {
+    if (!query.trim()) return [];
+    const q = query.trim().toLowerCase();
+    const all = await localDb.products.toArray();
+    return all
+      .filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.barcode?.includes(q))
+      .slice(0, 8);
+  }, [query]);
+
+  const subtotal = useMemo(() => cart.reduce((sum, l) => sum + l.product.price * l.quantity, 0), [cart]);
+  const total = subtotal; // tax is computed server-side on sync using the store's tax rate
+  const tendered = Number(amountTendered) || 0;
+  const changeDue = paymentMethod === "CASH" ? Math.max(tendered - total, 0) : 0;
+
+  function addToCart(product: CachedProduct) {
+    setCart((prev) => {
+      const existing = prev.find((l) => l.product.id === product.id);
+      if (existing) {
+        return prev.map((l) => (l.product.id === product.id ? { ...l, quantity: l.quantity + 1 } : l));
+      }
+      return [...prev, { product, quantity: 1 }];
+    });
+    setQuery("");
+  }
+
+  function updateQuantity(productId: string, quantity: number) {
+    setCart((prev) =>
+      quantity <= 0 ? prev.filter((l) => l.product.id !== productId) : prev.map((l) => (l.product.id === productId ? { ...l, quantity } : l))
+    );
+  }
+
+  async function completeSale(status: "HELD" | "COMPLETED") {
+    if (cart.length === 0) return;
+    const clientId = newClientId();
+    await queueSale({
+      clientId,
+      items: cart.map((l) => ({ productId: l.product.id, name: l.product.name, quantity: l.quantity, unitPrice: l.product.price })),
+      paymentMethod,
+      amountTendered: paymentMethod === "CASH" ? tendered : undefined,
+      status,
+      createdAt: new Date().toISOString(),
+    });
+
+    if (status === "COMPLETED") {
+      await localDb.transaction("rw", localDb.products, async () => {
+        for (const line of cart) {
+          const p = await localDb.products.get(line.product.id);
+          if (p) await localDb.products.update(p.id, { stockQty: p.stockQty - line.quantity });
+        }
+      });
+      setReceipt({ total, change: changeDue });
+    }
+
+    setCart([]);
+    setAmountTendered("");
+  }
+
+  return (
+    <>
+      <Topbar title="Checkout" subtitle="Search by name, SKU, or barcode" />
+      <div className="grid flex-1 grid-cols-[1.3fr_1fr] gap-6 overflow-hidden p-8">
+        <div className="flex flex-col gap-4 overflow-hidden">
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search products, orders…"
+            className="rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
+          />
+          {results && results.length > 0 && (
+            <Card className="flex flex-col gap-1 p-2">
+              {results.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => addToCart(p)}
+                  className="flex items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-brand-bg"
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-brand-ink">{p.name}</div>
+                    <div className="text-xs text-brand-inkMuted">
+                      {p.sku} · {p.stockQty} in stock
+                    </div>
+                  </div>
+                  <span className="text-sm font-semibold text-brand-ink">{currencyFmt.format(p.price)}</span>
+                </button>
+              ))}
+            </Card>
+          )}
+
+          <Card className="flex-1 overflow-auto">
+            <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Cart</div>
+            {cart.length === 0 && <div className="text-sm text-brand-inkMuted">No items yet — search above to add products.</div>}
+            <div className="flex flex-col gap-2">
+              {cart.map((line) => (
+                <div key={line.product.id} className="flex items-center justify-between rounded-[10px] bg-brand-bg px-3 py-2.5">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-brand-ink">{line.product.name}</div>
+                    <div className="text-xs text-brand-inkMuted">{currencyFmt.format(line.product.price)} each</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => updateQuantity(line.product.id, line.quantity - 1)}
+                      className="h-7 w-7 rounded-md bg-white text-brand-ink shadow-card"
+                    >
+                      −
+                    </button>
+                    <span className="w-6 text-center text-sm font-semibold">{line.quantity}</span>
+                    <button
+                      onClick={() => updateQuantity(line.product.id, line.quantity + 1)}
+                      className="h-7 w-7 rounded-md bg-white text-brand-ink shadow-card"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+
+        <Card className="flex flex-col gap-4">
+          <div className="font-display text-[15px] font-bold text-brand-ink">Payment</div>
+
+          <div className="flex flex-wrap gap-2">
+            {PAYMENT_METHODS.map((method) => (
+              <button
+                key={method}
+                onClick={() => setPaymentMethod(method)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  paymentMethod === method ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"
+                }`}
+              >
+                {method}
+              </button>
+            ))}
+          </div>
+
+          {paymentMethod === "CASH" && (
+            <label className="text-sm">
+              <span className="mb-1 block font-medium text-brand-ink">Amount tendered</span>
+              <input
+                type="number"
+                min="0"
+                value={amountTendered}
+                onChange={(e) => setAmountTendered(e.target.value)}
+                className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
+              />
+            </label>
+          )}
+
+          <div className="mt-auto flex flex-col gap-2 border-t border-brand-border pt-4">
+            <div className="flex justify-between text-sm text-brand-inkMuted">
+              <span>Subtotal</span>
+              <span>{currencyFmt.format(subtotal)}</span>
+            </div>
+            <div className="flex justify-between text-sm text-brand-inkMuted">
+              <span>Tax</span>
+              <span>Calculated on sync</span>
+            </div>
+            <div className="flex justify-between font-display text-lg font-bold text-brand-ink">
+              <span>Total</span>
+              <span>{currencyFmt.format(total)}</span>
+            </div>
+            {paymentMethod === "CASH" && (
+              <div className="flex justify-between text-sm font-semibold text-brand-accentText">
+                <span>Change due</span>
+                <span>{currencyFmt.format(changeDue)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-3">
+            <Button variant="secondary" className="flex-1" onClick={() => void completeSale("HELD")} disabled={cart.length === 0}>
+              Hold sale
+            </Button>
+            <Button className="flex-1" onClick={() => void completeSale("COMPLETED")} disabled={cart.length === 0}>
+              Complete sale
+            </Button>
+          </div>
+        </Card>
+      </div>
+
+      {receipt && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/40">
+          <Card className="w-80 text-center">
+            <div className="mb-2 font-display text-lg font-bold text-brand-ink">Sale complete</div>
+            <div className="mb-1 text-sm text-brand-inkMuted">Total charged</div>
+            <div className="mb-3 text-2xl font-bold text-brand-ink">{currencyFmt.format(receipt.total)}</div>
+            {receipt.change > 0 && (
+              <div className="mb-4 text-sm font-semibold text-brand-accentText">
+                Change due: {currencyFmt.format(receipt.change)}
+              </div>
+            )}
+            <Button className="w-full" onClick={() => setReceipt(null)}>
+              New sale
+            </Button>
+          </Card>
+        </div>
+      )}
+    </>
+  );
+}
