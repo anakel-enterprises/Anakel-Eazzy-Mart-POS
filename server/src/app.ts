@@ -13,7 +13,7 @@ import { settingsRouter } from "./routes/settings.js";
 
 export const app = express();
 
-app.use(cors({ origin: env.corsOrigin }));
+app.use(cors({ origin: env.corsOrigins }));
 app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));

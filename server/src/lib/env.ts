@@ -9,5 +9,7 @@ function required(name: string): string {
 export const env = {
   port: Number(process.env.PORT ?? 4000),
   jwtSecret: required("JWT_SECRET"),
-  corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+  // Comma-separated so a Vercel preview deploy's web URL can be added
+  // alongside the production one without a code change.
+  corsOrigins: (process.env.CORS_ORIGIN ?? "http://localhost:5173").split(",").map((s) => s.trim()),
 };
