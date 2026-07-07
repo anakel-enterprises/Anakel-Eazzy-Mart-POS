@@ -61,6 +61,8 @@ export async function flushPendingSales(): Promise<{ synced: number; failed: num
           amountTendered: sale.amountTendered,
           status: sale.status,
           createdAt: sale.createdAt,
+          customerId: sale.customerId,
+          couponCode: sale.couponCode,
         });
         await localDb.pendingSales.update(sale.clientId, { syncStatus: "synced" });
         synced++;

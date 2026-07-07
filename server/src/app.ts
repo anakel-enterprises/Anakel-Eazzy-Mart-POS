@@ -10,6 +10,10 @@ import { cashRegisterRouter } from "./routes/cashRegister.js";
 import { reportsRouter } from "./routes/reports.js";
 import { employeesRouter } from "./routes/employees.js";
 import { settingsRouter } from "./routes/settings.js";
+import { suppliersRouter } from "./routes/suppliers.js";
+import { customersRouter } from "./routes/customers.js";
+import { expensesRouter, incomeRouter } from "./routes/expenses.js";
+import { promotionsRouter, couponsRouter } from "./routes/promotions.js";
 
 export const app = express();
 
@@ -26,6 +30,12 @@ app.use("/api/cash-register", cashRegisterRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/employees", employeesRouter);
 app.use("/api/settings", settingsRouter);
+app.use("/api/suppliers", suppliersRouter);
+app.use("/api/customers", customersRouter);
+app.use("/api/expenses", expensesRouter);
+app.use("/api/income", incomeRouter);
+app.use("/api/promotions", promotionsRouter);
+app.use("/api/coupons", couponsRouter);
 
 app.use(errorHandler);
 

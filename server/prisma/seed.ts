@@ -84,7 +84,55 @@ async function main() {
     });
   }
 
-  console.log("Seed complete:", { store: store.name, users: 2, categories: categoryNames.length, products: products.length });
+  const supplier = await prisma.supplier.upsert({
+    where: { id: "seed-supplier-1" },
+    update: {},
+    create: {
+      id: "seed-supplier-1",
+      storeId: store.id,
+      name: "Nairobi Wholesale Distributors",
+      phone: "+254711000000",
+      email: "orders@nairobiwholesale.co.ke",
+      balance: 12500,
+    },
+  });
+
+  const customer = await prisma.customer.upsert({
+    where: { id: "seed-customer-1" },
+    update: {},
+    create: {
+      id: "seed-customer-1",
+      storeId: store.id,
+      name: "Peter Otieno",
+      phone: "+254722000000",
+      type: "RETAIL",
+      creditLimit: 5000,
+      creditBalance: 0,
+    },
+  });
+
+  const expenseCategory = await prisma.expenseCategory.upsert({
+    where: { storeId_name: { storeId: store.id, name: "Rent" } },
+    update: {},
+    create: { storeId: store.id, name: "Rent" },
+  });
+  for (const name of ["Utilities", "Transport", "Wages"]) {
+    await prisma.expenseCategory.upsert({
+      where: { storeId_name: { storeId: store.id, name } },
+      update: {},
+      create: { storeId: store.id, name },
+    });
+  }
+
+  console.log("Seed complete:", {
+    store: store.name,
+    users: 2,
+    categories: categoryNames.length,
+    products: products.length,
+    supplier: supplier.name,
+    customer: customer.name,
+    expenseCategory: expenseCategory.name,
+  });
 }
 
 main()

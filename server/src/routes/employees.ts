@@ -24,7 +24,7 @@ const createSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().min(8),
-  role: z.enum(["ADMIN", "CASHIER"]).default("CASHIER"),
+  role: z.enum(["ADMIN", "MANAGER", "CASHIER", "STOREKEEPER", "ACCOUNTANT"]).default("CASHIER"),
 });
 
 employeesRouter.post(
@@ -48,7 +48,7 @@ employeesRouter.post(
 
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
-  role: z.enum(["ADMIN", "CASHIER"]).optional(),
+  role: z.enum(["ADMIN", "MANAGER", "CASHIER", "STOREKEEPER", "ACCOUNTANT"]).optional(),
   active: z.boolean().optional(),
   password: z.string().min(8).optional(),
 });

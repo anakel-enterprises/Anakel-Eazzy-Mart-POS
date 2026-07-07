@@ -5,3 +5,19 @@
 body {
   @apply bg-brand-bg text-brand-ink font-sans antialiased;
 }
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #barcode-print-area,
+  #barcode-print-area * {
+    visibility: visible;
+  }
+  #barcode-print-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+}

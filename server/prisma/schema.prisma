@@ -20,7 +20,38 @@ datasource db {
 
 enum Role {
   ADMIN
+  MANAGER
   CASHIER
+  STOREKEEPER
+  ACCOUNTANT
+}
+
+enum CustomerType {
+  RETAIL
+  WHOLESALE
+  VIP
+}
+
+enum SupplierTransactionType {
+  PURCHASE
+  PAYMENT
+}
+
+enum ExpenseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PromotionType {
+  PERCENTAGE_DISCOUNT
+  FIXED_DISCOUNT
+  BOGO
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
 }
 
 enum PaymentMethod {
@@ -68,6 +99,15 @@ model Store {
   sales             Sale[]
   registerSessions  CashRegisterSession[]
   stockAdjustments  StockAdjustment[]
+  customers         Customer[]
+  suppliers         Supplier[]
+  supplierTransactions SupplierTransaction[]
+  creditPayments    CreditPayment[]
+  expenseCategories ExpenseCategory[]
+  expenses          Expense[]
+  incomes           Income[]
+  promotions        Promotion[]
+  coupons           Coupon[]
 }
 
 model User {
@@ -85,6 +125,10 @@ model User {
   sales            Sale[]
   registerSessions CashRegisterSession[]
   stockAdjustments StockAdjustment[]
+  supplierTransactions SupplierTransaction[]
+  creditPayments   CreditPayment[]
+  requestedExpenses Expense[] @relation("ExpenseRequestedBy")
+  approvedExpenses  Expense[] @relation("ExpenseApprovedBy")
 
   @@index([storeId])
 }
@@ -113,6 +157,8 @@ model Product {
   sku        String
   barcode    String?
   price      Decimal  @db.Decimal(12, 2)
+  wholesalePrice Decimal? @db.Decimal(12, 2)
+  vipPrice   Decimal? @db.Decimal(12, 2)
   cost       Decimal? @db.Decimal(12, 2)
   stockQty   Int      @default(0)
   lowStockThreshold Int @default(5)
@@ -137,17 +183,23 @@ model Sale {
   cashier    User       @relation(fields: [cashierId], references: [id])
   registerSessionId String?
   registerSession   CashRegisterSession? @relation(fields: [registerSessionId], references: [id])
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  couponId   String?
+  coupon     Coupon?   @relation(fields: [couponId], references: [id])
 
   // Client-generated id so an offline sale keeps a stable identity through sync.
   clientId   String     @unique
 
   status     SaleStatus @default(COMPLETED)
   subtotal   Decimal    @db.Decimal(12, 2)
+  discountTotal Decimal @default(0) @db.Decimal(12, 2)
   taxTotal   Decimal    @db.Decimal(12, 2)
   total      Decimal    @db.Decimal(12, 2)
   amountTendered Decimal? @db.Decimal(12, 2)
   changeDue  Decimal?   @db.Decimal(12, 2)
   paymentMethod PaymentMethod @default(CASH)
+  creditDueDate DateTime?
 
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
@@ -208,4 +260,157 @@ model StockAdjustment {
 
   @@index([storeId])
   @@index([productId])
+}
+
+model Customer {
+  id           String       @id @default(cuid())
+  storeId      String
+  store        Store        @relation(fields: [storeId], references: [id])
+  name         String
+  phone        String?
+  email        String?
+  type         CustomerType @default(RETAIL)
+  creditLimit  Decimal      @default(0) @db.Decimal(12, 2)
+  creditBalance Decimal     @default(0) @db.Decimal(12, 2)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  sales          Sale[]
+  creditPayments CreditPayment[]
+
+  @@index([storeId])
+}
+
+model CreditPayment {
+  id          String   @id @default(cuid())
+  storeId     String
+  store       Store    @relation(fields: [storeId], references: [id])
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id])
+  amount      Decimal  @db.Decimal(12, 2)
+  notes       String?
+  recordedById String
+  recordedBy  User     @relation(fields: [recordedById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([storeId])
+  @@index([customerId])
+}
+
+model Supplier {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id])
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  balance   Decimal  @default(0) @db.Decimal(12, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions SupplierTransaction[]
+
+  @@index([storeId])
+}
+
+model SupplierTransaction {
+  id          String                  @id @default(cuid())
+  storeId     String
+  store       Store                   @relation(fields: [storeId], references: [id])
+  supplierId  String
+  supplier    Supplier                @relation(fields: [supplierId], references: [id])
+  type        SupplierTransactionType
+  amount      Decimal                 @db.Decimal(12, 2)
+  description String?
+  recordedById String
+  recordedBy  User                    @relation(fields: [recordedById], references: [id])
+  createdAt   DateTime                @default(now())
+
+  @@index([storeId])
+  @@index([supplierId])
+}
+
+model ExpenseCategory {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id])
+  name      String
+  createdAt DateTime @default(now())
+
+  expenses Expense[]
+
+  @@unique([storeId, name])
+  @@index([storeId])
+}
+
+model Expense {
+  id             String          @id @default(cuid())
+  storeId        String
+  store          Store           @relation(fields: [storeId], references: [id])
+  categoryId     String
+  category       ExpenseCategory @relation(fields: [categoryId], references: [id])
+  amount         Decimal         @db.Decimal(12, 2)
+  description    String?
+  date           DateTime        @default(now())
+  status         ExpenseStatus   @default(PENDING)
+  requestedById  String
+  requestedBy    User            @relation("ExpenseRequestedBy", fields: [requestedById], references: [id])
+  approvedById   String?
+  approvedBy     User?           @relation("ExpenseApprovedBy", fields: [approvedById], references: [id])
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([storeId])
+}
+
+model Income {
+  id          String   @id @default(cuid())
+  storeId     String
+  store       Store    @relation(fields: [storeId], references: [id])
+  source      String
+  amount      Decimal  @db.Decimal(12, 2)
+  description String?
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@index([storeId])
+}
+
+model Promotion {
+  id                String        @id @default(cuid())
+  storeId           String
+  store             Store         @relation(fields: [storeId], references: [id])
+  name              String
+  type              PromotionType
+  discountPercent   Decimal?      @db.Decimal(5, 2)
+  discountAmount    Decimal?      @db.Decimal(12, 2)
+  productId         String?
+  startDate         DateTime
+  endDate           DateTime
+  active            Boolean       @default(true)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([storeId])
+  @@index([storeId, active, startDate, endDate])
+}
+
+model Coupon {
+  id            String       @id @default(cuid())
+  storeId       String
+  store         Store        @relation(fields: [storeId], references: [id])
+  code          String
+  discountType  DiscountType
+  discountValue Decimal      @db.Decimal(12, 2)
+  expiresAt     DateTime?
+  usageLimit    Int?
+  timesUsed     Int          @default(0)
+  active        Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+
+  sales Sale[]
+
+  @@unique([storeId, code])
+  @@index([storeId])
 }

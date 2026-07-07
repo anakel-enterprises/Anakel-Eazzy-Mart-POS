@@ -22,7 +22,7 @@ const categorySchema = z.object({ name: z.string().min(1) });
 
 categoriesRouter.post(
   "/",
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "MANAGER"),
   asyncHandler(async (req, res) => {
     const { name } = categorySchema.parse(req.body);
     const category = await prisma.category.create({
@@ -34,7 +34,7 @@ categoriesRouter.post(
 
 categoriesRouter.put(
   "/:id",
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "MANAGER"),
   asyncHandler(async (req, res) => {
     const { name } = categorySchema.parse(req.body);
     const existing = await prisma.category.findFirst({
@@ -51,7 +51,7 @@ categoriesRouter.put(
 
 categoriesRouter.delete(
   "/:id",
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "MANAGER"),
   asyncHandler(async (req, res) => {
     const existing = await prisma.category.findFirst({
       where: { id: req.params.id, storeId: req.auth!.storeId },

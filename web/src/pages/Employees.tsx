@@ -3,11 +3,21 @@ import { api, ApiError } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 
+type Role = "ADMIN" | "MANAGER" | "CASHIER" | "STOREKEEPER" | "ACCOUNTANT";
+
+const ROLE_LABELS: Record<Role, string> = {
+  ADMIN: "Admin",
+  MANAGER: "Manager",
+  CASHIER: "Cashier",
+  STOREKEEPER: "Storekeeper",
+  ACCOUNTANT: "Accountant",
+};
+
 interface Employee {
   id: string;
   name: string;
   email: string;
-  role: "ADMIN" | "CASHIER";
+  role: Role;
   active: boolean;
 }
 
@@ -15,7 +25,7 @@ interface EmployeeForm {
   name: string;
   email: string;
   password: string;
-  role: "ADMIN" | "CASHIER";
+  role: Role;
 }
 
 const emptyForm: EmployeeForm = { name: "", email: "", password: "", role: "CASHIER" };
@@ -66,9 +76,12 @@ export function Employees() {
               <input required placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input required type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input required type="password" minLength={8} placeholder="Temporary password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as "ADMIN" | "CASHIER" })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
-                <option value="CASHIER">Cashier</option>
-                <option value="ADMIN">Admin</option>
+              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
+                {Object.entries(ROLE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
               </select>
               {error && <div className="col-span-2 text-sm font-medium text-brand-warn">{error}</div>}
               <div className="col-span-2">
@@ -89,7 +102,7 @@ export function Employees() {
             <div key={emp.id} className="grid grid-cols-4 items-center border-b border-brand-border/60 py-2.5 text-sm">
               <span className="font-semibold text-brand-ink">{emp.name}</span>
               <span className="text-brand-inkMuted">{emp.email}</span>
-              <span>{emp.role === "ADMIN" ? "Admin" : "Cashier"}</span>
+              <span>{ROLE_LABELS[emp.role]}</span>
               <button
                 onClick={() => void toggleActive(emp)}
                 className={`w-fit rounded-full px-2.5 py-1 text-[11.5px] font-bold ${

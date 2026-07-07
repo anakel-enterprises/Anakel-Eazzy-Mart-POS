@@ -40,6 +40,8 @@ const productSchema = z.object({
   barcode: z.string().optional(),
   categoryId: z.string().optional().nullable(),
   price: z.number().positive(),
+  wholesalePrice: z.number().positive().optional(),
+  vipPrice: z.number().positive().optional(),
   cost: z.number().nonnegative().optional(),
   stockQty: z.number().int().nonnegative().default(0),
   lowStockThreshold: z.number().int().nonnegative().default(5),
@@ -48,7 +50,7 @@ const productSchema = z.object({
 
 productsRouter.post(
   "/",
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "MANAGER", "STOREKEEPER"),
   asyncHandler(async (req, res) => {
     const data = productSchema.parse(req.body);
     const product = await prisma.product.create({
@@ -60,7 +62,7 @@ productsRouter.post(
 
 productsRouter.put(
   "/:id",
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "MANAGER", "STOREKEEPER"),
   asyncHandler(async (req, res) => {
     const data = productSchema.partial().parse(req.body);
     const existing = await prisma.product.findFirst({
@@ -77,7 +79,7 @@ productsRouter.put(
 
 productsRouter.delete(
   "/:id",
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "MANAGER", "STOREKEEPER"),
   asyncHandler(async (req, res) => {
     const existing = await prisma.product.findFirst({
       where: { id: req.params.id, storeId: req.auth!.storeId },
@@ -99,7 +101,7 @@ const adjustmentSchema = z.object({
 
 productsRouter.post(
   "/:id/adjustments",
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "MANAGER", "STOREKEEPER"),
   asyncHandler(async (req, res) => {
     const data = adjustmentSchema.parse(req.body);
     const product = await prisma.product.findFirst({

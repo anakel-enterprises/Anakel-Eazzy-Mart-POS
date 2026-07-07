@@ -29,6 +29,8 @@ export interface PendingSale {
   createdAt: string;
   syncStatus: SyncStatus;
   syncError?: string;
+  customerId?: string;
+  couponCode?: string;
 }
 
 class LocalDb extends Dexie {

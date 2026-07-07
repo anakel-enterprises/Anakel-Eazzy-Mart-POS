@@ -103,3 +103,196 @@ reportsRouter.get(
     res.json({ totals, byPaymentMethod, topProducts });
   })
 );
+
+function dateRangeWhere(from: unknown, to: unknown) {
+  if (!from && !to) return {};
+  return {
+    createdAt: {
+      ...(from ? { gte: new Date(String(from)) } : {}),
+      ...(to ? { lte: new Date(String(to)) } : {}),
+    },
+  };
+}
+
+reportsRouter.get(
+  "/profit",
+  asyncHandler(async (req, res) => {
+    const storeId = req.auth!.storeId;
+    const { from, to } = req.query;
+
+    const items = await prisma.saleItem.findMany({
+      where: { sale: { storeId, status: "COMPLETED", ...dateRangeWhere(from, to) } },
+      include: { product: { select: { cost: true, name: true } } },
+    });
+
+    let revenue = new Prisma.Decimal(0);
+    let cogs = new Prisma.Decimal(0);
+    const byProduct = new Map<string, { name: string; revenue: Prisma.Decimal; cost: Prisma.Decimal }>();
+
+    for (const item of items) {
+      revenue = revenue.add(item.lineTotal);
+      const unitCost = item.product.cost ?? new Prisma.Decimal(0);
+      const itemCost = unitCost.mul(item.quantity);
+      cogs = cogs.add(itemCost);
+
+      const entry = byProduct.get(item.productId) ?? {
+        name: item.product.name,
+        revenue: new Prisma.Decimal(0),
+        cost: new Prisma.Decimal(0),
+      };
+      entry.revenue = entry.revenue.add(item.lineTotal);
+      entry.cost = entry.cost.add(itemCost);
+      byProduct.set(item.productId, entry);
+    }
+
+    res.json({
+      revenue,
+      cogs,
+      grossProfit: revenue.sub(cogs),
+      byProduct: Array.from(byProduct.entries()).map(([productId, v]) => ({
+        productId,
+        name: v.name,
+        revenue: v.revenue,
+        cost: v.cost,
+        profit: v.revenue.sub(v.cost),
+      })),
+    });
+  })
+);
+
+reportsRouter.get(
+  "/inventory",
+  asyncHandler(async (req, res) => {
+    const storeId = req.auth!.storeId;
+    const products = await prisma.product.findMany({
+      where: { storeId, active: true },
+      select: { id: true, name: true, sku: true, stockQty: true, price: true, cost: true },
+    });
+
+    let retailValue = new Prisma.Decimal(0);
+    let costValue = new Prisma.Decimal(0);
+    for (const p of products) {
+      retailValue = retailValue.add(p.price.mul(p.stockQty));
+      costValue = costValue.add((p.cost ?? new Prisma.Decimal(0)).mul(p.stockQty));
+    }
+
+    res.json({
+      productCount: products.length,
+      totalUnits: products.reduce((sum, p) => sum + p.stockQty, 0),
+      retailValue,
+      costValue,
+      potentialProfit: retailValue.sub(costValue),
+      products,
+    });
+  })
+);
+
+reportsRouter.get(
+  "/finance",
+  asyncHandler(async (req, res) => {
+    const storeId = req.auth!.storeId;
+    const { from, to } = req.query;
+    const range = dateRangeWhere(from, to);
+
+    const [salesTotal, expensesTotal, incomeTotal, creditOutstanding] = await Promise.all([
+      prisma.sale.aggregate({ where: { storeId, status: "COMPLETED", ...range }, _sum: { total: true } }),
+      prisma.expense.aggregate({
+        where: { storeId, status: "APPROVED", ...(from || to ? { date: range.createdAt } : {}) },
+        _sum: { amount: true },
+      }),
+      prisma.income.aggregate({
+        where: { storeId, ...(from || to ? { date: range.createdAt } : {}) },
+        _sum: { amount: true },
+      }),
+      prisma.customer.aggregate({ where: { storeId }, _sum: { creditBalance: true } }),
+    ]);
+
+    const revenue = salesTotal._sum.total ?? new Prisma.Decimal(0);
+    const expenses = expensesTotal._sum.amount ?? new Prisma.Decimal(0);
+    const otherIncome = incomeTotal._sum.amount ?? new Prisma.Decimal(0);
+
+    res.json({
+      revenue,
+      expenses,
+      otherIncome,
+      netCashFlow: new Prisma.Decimal(revenue).add(otherIncome).sub(expenses),
+      creditOutstanding: creditOutstanding._sum.creditBalance ?? 0,
+    });
+  })
+);
+
+reportsRouter.get(
+  "/customers",
+  asyncHandler(async (req, res) => {
+    const storeId = req.auth!.storeId;
+    const [totalCustomers, creditOutstanding, topCustomers] = await Promise.all([
+      prisma.customer.count({ where: { storeId } }),
+      prisma.customer.aggregate({ where: { storeId }, _sum: { creditBalance: true } }),
+      prisma.sale.groupBy({
+        by: ["customerId"],
+        where: { storeId, status: "COMPLETED", customerId: { not: null } },
+        _sum: { total: true },
+        _count: true,
+        orderBy: { _sum: { total: "desc" } },
+        take: 10,
+      }),
+    ]);
+
+    const customerIds = topCustomers.map((c) => c.customerId).filter((id): id is string => !!id);
+    const customers = await prisma.customer.findMany({ where: { id: { in: customerIds } } });
+    const customerMap = new Map(customers.map((c) => [c.id, c]));
+
+    res.json({
+      totalCustomers,
+      creditOutstanding: creditOutstanding._sum.creditBalance ?? 0,
+      topCustomers: topCustomers.map((c) => ({
+        customerId: c.customerId,
+        name: c.customerId ? customerMap.get(c.customerId)?.name : "Unknown",
+        totalSpent: c._sum.total,
+        orderCount: c._count,
+      })),
+    });
+  })
+);
+
+reportsRouter.get(
+  "/suppliers",
+  asyncHandler(async (req, res) => {
+    const storeId = req.auth!.storeId;
+    const [totalOwed, suppliers] = await Promise.all([
+      prisma.supplier.aggregate({ where: { storeId }, _sum: { balance: true } }),
+      prisma.supplier.findMany({ where: { storeId }, orderBy: { balance: "desc" } }),
+    ]);
+    res.json({ totalOwed: totalOwed._sum.balance ?? 0, suppliers });
+  })
+);
+
+reportsRouter.get(
+  "/employee-performance",
+  asyncHandler(async (req, res) => {
+    const storeId = req.auth!.storeId;
+    const { from, to } = req.query;
+    const range = dateRangeWhere(from, to);
+
+    const grouped = await prisma.sale.groupBy({
+      by: ["cashierId"],
+      where: { storeId, status: "COMPLETED", ...range },
+      _sum: { total: true },
+      _count: true,
+      orderBy: { _sum: { total: "desc" } },
+    });
+
+    const userIds = grouped.map((g) => g.cashierId);
+    const users = await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } });
+    const userMap = new Map(users.map((u) => [u.id, u.name]));
+
+    res.json(
+      grouped.map((g) => ({
+        cashierId: g.cashierId,
+        name: userMap.get(g.cashierId) ?? "Unknown",
+        totalSales: g._sum.total,
+        transactionCount: g._count,
+      }))
+    );
+  })
+);

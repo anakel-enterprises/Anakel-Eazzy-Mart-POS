@@ -1,13 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb, newClientId, type CachedProduct } from "../db/localDb";
 import { queueSale, refreshProductCache } from "../lib/sync";
+import { api } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+
+// The camera-scanning library is sizable and only needed once the modal
+// opens, so it's split into its own chunk instead of bloating the app shell.
+const BarcodeScannerModal = lazy(() =>
+  import("../components/BarcodeScannerModal").then((m) => ({ default: m.BarcodeScannerModal }))
+);
 
 interface CartLine {
   product: CachedProduct;
   quantity: number;
+}
+
+interface CustomerOption {
+  id: string;
+  name: string;
+  phone: string | null;
 }
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
@@ -19,10 +32,26 @@ export function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState<(typeof PAYMENT_METHODS)[number]>("CASH");
   const [amountTendered, setAmountTendered] = useState("");
   const [receipt, setReceipt] = useState<{ total: number; change: number } | null>(null);
+  const [showScanner, setShowScanner] = useState(false);
+  const [couponCode, setCouponCode] = useState("");
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
+  const [customer, setCustomer] = useState<CustomerOption | null>(null);
 
   useEffect(() => {
     if (navigator.onLine) void refreshProductCache();
   }, []);
+
+  useEffect(() => {
+    if (paymentMethod !== "CREDIT" || !customerQuery.trim() || !navigator.onLine) {
+      setCustomerOptions([]);
+      return;
+    }
+    const handle = setTimeout(() => {
+      void api.get<CustomerOption[]>(`/api/customers?q=${encodeURIComponent(customerQuery)}`).then(setCustomerOptions);
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [customerQuery, paymentMethod]);
 
   const results = useLiveQuery(async () => {
     if (!query.trim()) return [];
@@ -57,6 +86,7 @@ export function Checkout() {
 
   async function completeSale(status: "HELD" | "COMPLETED") {
     if (cart.length === 0) return;
+    if (paymentMethod === "CREDIT" && !customer) return;
     const clientId = newClientId();
     await queueSale({
       clientId,
@@ -65,6 +95,8 @@ export function Checkout() {
       amountTendered: paymentMethod === "CASH" ? tendered : undefined,
       status,
       createdAt: new Date().toISOString(),
+      customerId: customer?.id,
+      couponCode: couponCode.trim() || undefined,
     });
 
     if (status === "COMPLETED") {
@@ -79,6 +111,14 @@ export function Checkout() {
 
     setCart([]);
     setAmountTendered("");
+    setCouponCode("");
+    setCustomer(null);
+    setCustomerQuery("");
+  }
+
+  function handleScan(value: string) {
+    setShowScanner(false);
+    setQuery(value);
   }
 
   return (
@@ -86,13 +126,18 @@ export function Checkout() {
       <Topbar title="Checkout" subtitle="Search by name, SKU, or barcode" />
       <div className="grid flex-1 grid-cols-[1.3fr_1fr] gap-6 overflow-hidden p-8">
         <div className="flex flex-col gap-4 overflow-hidden">
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search products, orders…"
-            className="rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
-          />
+          <div className="flex gap-2">
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search products, orders… or scan a barcode"
+              className="flex-1 rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
+            />
+            <Button variant="secondary" onClick={() => setShowScanner(true)}>
+              Scan
+            </Button>
+          </div>
           {results && results.length > 0 && (
             <Card className="flex flex-col gap-1 p-2">
               {results.map((p) => (
@@ -174,6 +219,55 @@ export function Checkout() {
             </label>
           )}
 
+          {paymentMethod === "CREDIT" && (
+            <div className="text-sm">
+              <span className="mb-1 block font-medium text-brand-ink">Customer</span>
+              {customer ? (
+                <div className="flex items-center justify-between rounded-lg bg-brand-bg px-3 py-2">
+                  <span className="font-semibold text-brand-ink">{customer.name}</span>
+                  <button onClick={() => setCustomer(null)} className="text-xs text-brand-inkMuted hover:text-brand-ink">
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <input
+                    value={customerQuery}
+                    onChange={(e) => setCustomerQuery(e.target.value)}
+                    placeholder="Search customer by name or phone"
+                    className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
+                  />
+                  {customerOptions.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full rounded-lg border border-brand-border bg-white shadow-card">
+                      {customerOptions.map((c) => (
+                        <button
+                          key={c.id}
+                          onClick={() => {
+                            setCustomer(c);
+                            setCustomerOptions([]);
+                          }}
+                          className="block w-full px-3 py-2 text-left text-sm hover:bg-brand-bg"
+                        >
+                          {c.name} {c.phone && <span className="text-brand-inkMuted">· {c.phone}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <label className="text-sm">
+            <span className="mb-1 block font-medium text-brand-ink">Coupon code (optional)</span>
+            <input
+              value={couponCode}
+              onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+              placeholder="e.g. SAVE50"
+              className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
+            />
+          </label>
+
           <div className="mt-auto flex flex-col gap-2 border-t border-brand-border pt-4">
             <div className="flex justify-between text-sm text-brand-inkMuted">
               <span>Subtotal</span>
@@ -199,7 +293,11 @@ export function Checkout() {
             <Button variant="secondary" className="flex-1" onClick={() => void completeSale("HELD")} disabled={cart.length === 0}>
               Hold sale
             </Button>
-            <Button className="flex-1" onClick={() => void completeSale("COMPLETED")} disabled={cart.length === 0}>
+            <Button
+              className="flex-1"
+              onClick={() => void completeSale("COMPLETED")}
+              disabled={cart.length === 0 || (paymentMethod === "CREDIT" && !customer)}
+            >
               Complete sale
             </Button>
           </div>
@@ -222,6 +320,12 @@ export function Checkout() {
             </Button>
           </Card>
         </div>
+      )}
+
+      {showScanner && (
+        <Suspense fallback={null}>
+          <BarcodeScannerModal onScan={handleScan} onClose={() => setShowScanner(false)} />
+        </Suspense>
       )}
     </>
   );
