@@ -158,7 +158,7 @@ export function Reports() {
   return (
     <>
       <Topbar title="Reports" subtitle="P&L, sales, profit, inventory, finance, customers, suppliers, employees" />
-      <div className="flex flex-1 flex-col gap-4 overflow-auto p-8">
+      <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 sm:p-6 lg:p-8">
         <div className="flex flex-wrap gap-2">
           {TABS.map((t) => (
             <button
@@ -173,8 +173,8 @@ export function Reports() {
 
         {tab === "P&L" && (
           <>
-            <div className="flex items-center justify-between">
-              <div className="flex gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap gap-2">
                 {PERIODS.map((p) => (
                   <button
                     key={p}
@@ -226,7 +226,7 @@ export function Reports() {
                 Download CSV
               </Button>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Total Revenue</div>
                 <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(sales?.totals._sum.total ?? 0)}</div>
@@ -243,7 +243,7 @@ export function Reports() {
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Sales by payment method</div>
               {sales?.byPaymentMethod.map((row) => (
-                <div key={row.paymentMethod} className="flex items-center justify-between border-b border-brand-border/60 py-2 text-sm">
+                <div key={row.paymentMethod} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
                   <span className="font-semibold text-brand-ink">{row.paymentMethod}</span>
                   <span className="text-brand-inkMuted">{row._count} sales</span>
                   <span className="font-semibold">{currencyFmt.format(row._sum.total ?? 0)}</span>
@@ -253,7 +253,7 @@ export function Reports() {
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Top products</div>
               {sales?.topProducts.map((p) => (
-                <div key={p.productId} className="flex items-center justify-between border-b border-brand-border/60 py-2 text-sm">
+                <div key={p.productId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
                   <span className="font-semibold text-brand-ink">{p.name}</span>
                   <span className="text-brand-inkMuted">{p._sum.quantity ?? 0} sold</span>
                   <span className="font-semibold">{currencyFmt.format(p._sum.lineTotal ?? 0)}</span>
@@ -281,7 +281,7 @@ export function Reports() {
                 Download CSV
               </Button>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Revenue</div>
                 <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(profit?.revenue ?? 0)}</div>
@@ -300,7 +300,7 @@ export function Reports() {
               {profit?.byProduct
                 .sort((a, b) => b.profit - a.profit)
                 .map((p) => (
-                  <div key={p.productId} className="flex items-center justify-between border-b border-brand-border/60 py-2 text-sm">
+                  <div key={p.productId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
                     <span className="font-semibold text-brand-ink">{p.name}</span>
                     <span className="text-brand-inkMuted">rev {currencyFmt.format(p.revenue)}</span>
                     <span className="font-semibold text-brand-accentText">{currencyFmt.format(p.profit)}</span>
@@ -328,7 +328,7 @@ export function Reports() {
                 Download CSV
               </Button>
             </div>
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Products</div>
                 <div className="font-display text-2xl font-bold text-brand-ink">{inventory?.productCount ?? 0}</div>
@@ -349,7 +349,7 @@ export function Reports() {
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Stock valuation</div>
               {inventory?.products.map((p) => (
-                <div key={p.id} className="flex items-center justify-between border-b border-brand-border/60 py-2 text-sm">
+                <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
                   <span className="font-semibold text-brand-ink">{p.name}</span>
                   <span className="text-brand-inkMuted">{p.stockQty} units</span>
                   <span className="font-semibold">{currencyFmt.format(p.stockQty * Number(p.price))}</span>
@@ -383,7 +383,7 @@ export function Reports() {
                 Download CSV
               </Button>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Sales Revenue</div>
                 <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(finance?.revenue ?? 0)}</div>
@@ -426,7 +426,7 @@ export function Reports() {
                 Download CSV
               </Button>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Total Customers</div>
                 <div className="font-display text-2xl font-bold text-brand-ink">{customers?.totalCustomers ?? 0}</div>
@@ -439,7 +439,7 @@ export function Reports() {
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Top customers</div>
               {customers?.topCustomers.map((c) => (
-                <div key={c.customerId} className="flex items-center justify-between border-b border-brand-border/60 py-2 text-sm">
+                <div key={c.customerId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
                   <span className="font-semibold text-brand-ink">{c.name}</span>
                   <span className="text-brand-inkMuted">{c.orderCount} orders</span>
                   <span className="font-semibold">{currencyFmt.format(c.totalSpent)}</span>
@@ -475,7 +475,7 @@ export function Reports() {
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">By supplier</div>
               {suppliers?.suppliers.map((s) => (
-                <div key={s.id} className="flex items-center justify-between border-b border-brand-border/60 py-2 text-sm">
+                <div key={s.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
                   <span className="font-semibold text-brand-ink">{s.name}</span>
                   <span className={`font-semibold ${Number(s.balance) > 0 ? "text-brand-warn" : "text-brand-accentText"}`}>
                     {currencyFmt.format(Number(s.balance))}
@@ -507,7 +507,7 @@ export function Reports() {
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Sales by employee</div>
               {employees?.map((e) => (
-                <div key={e.cashierId} className="flex items-center justify-between border-b border-brand-border/60 py-2 text-sm">
+                <div key={e.cashierId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
                   <span className="font-semibold text-brand-ink">{e.name}</span>
                   <span className="text-brand-inkMuted">{e.transactionCount} sales</span>
                   <span className="font-semibold">{currencyFmt.format(e.totalSales)}</span>

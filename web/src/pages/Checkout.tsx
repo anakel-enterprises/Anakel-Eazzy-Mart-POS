@@ -196,15 +196,15 @@ export function Checkout() {
   return (
     <>
       <Topbar title="Checkout" subtitle="Search by name, SKU, or barcode" />
-      <div className="grid flex-1 grid-cols-[1.3fr_1fr] gap-6 overflow-hidden p-8">
-        <div className="flex flex-col gap-4 overflow-hidden">
-          <div className="flex gap-2">
+      <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6 lg:grid lg:grid-cols-[1.3fr_1fr] lg:overflow-hidden lg:p-8">
+        <div className="flex flex-col gap-4 lg:overflow-hidden">
+          <div className="flex flex-wrap gap-2">
             <input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search products, orders… or scan a barcode"
-              className="flex-1 rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
+              className="min-w-[200px] flex-1 rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
             />
             <Button variant="secondary" onClick={() => setShowScanner(true)}>
               Scan
@@ -238,7 +238,7 @@ export function Checkout() {
             </Card>
           )}
 
-          <Card className="flex-1 overflow-auto">
+          <Card className="lg:flex-1 lg:overflow-auto">
             <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Cart</div>
             {cart.length === 0 && <div className="text-sm text-brand-inkMuted">No items yet — search above to add products.</div>}
             <div className="flex flex-col gap-2">
@@ -269,7 +269,7 @@ export function Checkout() {
           </Card>
         </div>
 
-        <Card className="flex flex-col gap-4 overflow-auto">
+        <Card className="flex flex-col gap-4 lg:overflow-auto">
           <div className="font-display text-[15px] font-bold text-brand-ink">Payment</div>
 
           <div className="flex flex-wrap gap-2">
@@ -440,8 +440,8 @@ export function Checkout() {
       </div>
 
       {receipt && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/40">
-          <Card className="w-80 text-center">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4">
+          <Card className="w-full max-w-xs text-center">
             <div className="mb-2 font-display text-lg font-bold text-brand-ink">Sale complete</div>
             <div className="mb-1 text-sm text-brand-inkMuted">Total charged</div>
             <div className="mb-3 text-2xl font-bold text-brand-ink">{currencyFmt.format(receipt.total)}</div>
@@ -458,8 +458,8 @@ export function Checkout() {
       )}
 
       {showHeld && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/40">
-          <Card className="w-96 max-h-[80vh] overflow-auto">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4">
+          <Card className="max-h-[80vh] w-full max-w-md overflow-auto">
             <div className="mb-3 flex items-center justify-between">
               <span className="font-display text-lg font-bold text-brand-ink">Held sales</span>
               <button onClick={() => setShowHeld(false)} className="text-sm text-brand-inkMuted hover:text-brand-ink">

@@ -96,8 +96,8 @@ export function Inventory() {
   return (
     <>
       <Topbar title="Inventory" subtitle={`${products.length} products`} />
-      <div className="flex flex-1 flex-col gap-4 overflow-auto p-8">
-        <div className="flex justify-end gap-3">
+      <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 sm:p-6 lg:p-8">
+        <div className="flex flex-wrap justify-end gap-3">
           <Button
             variant="secondary"
             onClick={() => setShowLabels((v) => !v)}
@@ -110,7 +110,7 @@ export function Inventory() {
 
         {showForm && (
           <Card>
-            <form onSubmit={handleSubmit} className="grid grid-cols-3 gap-3">
+            <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
               <input required placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input required placeholder="SKU" value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input placeholder="Barcode" value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
@@ -126,8 +126,8 @@ export function Inventory() {
               <input type="number" min="0" step="0.01" placeholder="Wholesale price (optional)" value={form.wholesalePrice} onChange={(e) => setForm({ ...form, wholesalePrice: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input type="number" min="0" step="0.01" placeholder="VIP price (optional)" value={form.vipPrice} onChange={(e) => setForm({ ...form, vipPrice: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input type="number" min="0" placeholder="Starting stock" value={form.stockQty} onChange={(e) => setForm({ ...form, stockQty: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-              {error && <div className="col-span-3 text-sm font-medium text-brand-warn">{error}</div>}
-              <div className="col-span-3">
+              {error && <div className="col-span-full text-sm font-medium text-brand-warn">{error}</div>}
+              <div className="col-span-full">
                 <Button type="submit">Save product</Button>
               </div>
             </form>
@@ -135,33 +135,37 @@ export function Inventory() {
         )}
 
         <Card>
-          <div className="grid grid-cols-[0.3fr_2fr_1fr_1fr_1fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-            <span></span>
-            <span>PRODUCT</span>
-            <span>SKU</span>
-            <span>CATEGORY</span>
-            <span>PRICE</span>
-            <span>STOCK</span>
-            <span>ADJUST</span>
-          </div>
-          {products.map((p) => (
-            <div key={p.id} className="grid grid-cols-[0.3fr_2fr_1fr_1fr_1fr_1fr_1fr] items-center border-b border-brand-border/60 py-2.5 text-sm">
-              <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelected(p.id)} className="h-4 w-4" />
-              <span className="font-semibold text-brand-ink">{p.name}</span>
-              <span className="text-brand-inkMuted">{p.sku}</span>
-              <span className="text-brand-inkMuted">{p.category?.name ?? "—"}</span>
-              <span>{currencyFmt.format(Number(p.price))}</span>
-              <span className={p.stockQty <= p.lowStockThreshold ? "font-bold text-brand-warn" : ""}>{p.stockQty}</span>
-              <div className="flex gap-1.5">
-                <button onClick={() => void adjustStock(p.id, -1)} className="h-7 w-7 rounded-md bg-brand-bg text-brand-ink">
-                  −
-                </button>
-                <button onClick={() => void adjustStock(p.id, 1)} className="h-7 w-7 rounded-md bg-brand-bg text-brand-ink">
-                  +
-                </button>
+          <div className="overflow-x-auto">
+            <div className="min-w-[700px]">
+              <div className="grid grid-cols-[0.3fr_2fr_1fr_1fr_1fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                <span></span>
+                <span>PRODUCT</span>
+                <span>SKU</span>
+                <span>CATEGORY</span>
+                <span>PRICE</span>
+                <span>STOCK</span>
+                <span>ADJUST</span>
               </div>
+              {products.map((p) => (
+                <div key={p.id} className="grid grid-cols-[0.3fr_2fr_1fr_1fr_1fr_1fr_1fr] items-center border-b border-brand-border/60 py-2.5 text-sm">
+                  <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelected(p.id)} className="h-4 w-4" />
+                  <span className="font-semibold text-brand-ink">{p.name}</span>
+                  <span className="text-brand-inkMuted">{p.sku}</span>
+                  <span className="text-brand-inkMuted">{p.category?.name ?? "—"}</span>
+                  <span>{currencyFmt.format(Number(p.price))}</span>
+                  <span className={p.stockQty <= p.lowStockThreshold ? "font-bold text-brand-warn" : ""}>{p.stockQty}</span>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => void adjustStock(p.id, -1)} className="h-7 w-7 rounded-md bg-brand-bg text-brand-ink">
+                      −
+                    </button>
+                    <button onClick={() => void adjustStock(p.id, 1)} className="h-7 w-7 rounded-md bg-brand-bg text-brand-ink">
+                      +
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </Card>
 
         {showLabels && (

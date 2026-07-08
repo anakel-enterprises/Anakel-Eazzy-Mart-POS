@@ -27,10 +27,10 @@ export function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-brand-bg">
+    <div className="flex min-h-screen items-center justify-center bg-brand-bg p-4">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm rounded-2xl border border-brand-border bg-white p-8 shadow-card"
+        className="w-full max-w-sm rounded-2xl border border-brand-border bg-white p-6 shadow-card sm:p-8"
       >
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-brand-accentDeep font-display text-lg font-bold text-white">

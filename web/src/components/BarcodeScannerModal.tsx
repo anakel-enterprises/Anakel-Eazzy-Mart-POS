@@ -33,8 +33,8 @@ export function BarcodeScannerModal({ onScan, onClose }: { onScan: (value: strin
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <Card className="w-96">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <Card className="w-full max-w-sm">
         <div className="mb-3 flex items-center justify-between">
           <span className="font-display text-[15px] font-bold text-brand-ink">Scan barcode</span>
           <button onClick={onClose} className="text-sm text-brand-inkMuted hover:text-brand-ink">

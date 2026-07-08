@@ -82,8 +82,8 @@ export function Suppliers() {
   return (
     <>
       <Topbar title="Suppliers" subtitle={`${suppliers.length} suppliers`} />
-      <div className="flex flex-1 gap-6 overflow-hidden p-8">
-        <div className="flex w-full max-w-md flex-col gap-4 overflow-auto">
+      <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6 lg:flex-row lg:overflow-hidden lg:p-8">
+        <div className="flex w-full flex-col gap-4 lg:max-w-md lg:overflow-auto">
           <div className="flex justify-end">
             <Button onClick={() => setShowForm((v) => !v)}>{showForm ? "Cancel" : "Add supplier"}</Button>
           </div>
@@ -121,7 +121,7 @@ export function Suppliers() {
         </div>
 
         {selected && (
-          <Card className="flex flex-1 flex-col gap-4 overflow-auto">
+          <Card className="flex flex-1 flex-col gap-4 lg:overflow-auto">
             <div className="flex items-center justify-between">
               <div>
                 <div className="font-display text-lg font-bold text-brand-ink">{selected.name}</div>

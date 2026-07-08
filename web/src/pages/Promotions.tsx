@@ -106,8 +106,8 @@ export function Promotions() {
   return (
     <>
       <Topbar title="Promotions" subtitle="Storewide/product discounts and coupon codes" />
-      <div className="flex flex-1 flex-col gap-4 overflow-auto p-8">
-        <div className="flex items-center justify-between">
+      <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 sm:p-6 lg:p-8">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-2">
             <button onClick={() => setTab("promotions")} className={`rounded-full px-4 py-1.5 text-sm font-semibold ${tab === "promotions" ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"}`}>
               Promotions
@@ -121,7 +121,7 @@ export function Promotions() {
 
         {showForm && tab === "promotions" && (
           <Card>
-            <form onSubmit={submitPromotion} className="grid grid-cols-3 gap-3">
+            <form onSubmit={submitPromotion} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
               <input required placeholder="Name (e.g. Weekend 10% Off)" value={promoForm.name} onChange={(e) => setPromoForm({ ...promoForm, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <select value={promoForm.type} onChange={(e) => setPromoForm({ ...promoForm, type: e.target.value as Promotion["type"] })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
                 <option value="PERCENTAGE_DISCOUNT">Percentage discount (storewide)</option>
@@ -140,8 +140,8 @@ export function Promotions() {
                 <span className="mb-1 block font-medium text-brand-ink">Ends</span>
                 <input required type="datetime-local" value={promoForm.endDate} onChange={(e) => setPromoForm({ ...promoForm, endDate: e.target.value })} className="w-full rounded-lg border border-brand-border px-3 py-2" />
               </label>
-              {error && <div className="col-span-3 text-sm font-medium text-brand-warn">{error}</div>}
-              <div className="col-span-3">
+              {error && <div className="col-span-full text-sm font-medium text-brand-warn">{error}</div>}
+              <div className="col-span-full">
                 <Button type="submit">Save promotion</Button>
               </div>
             </form>
@@ -150,7 +150,7 @@ export function Promotions() {
 
         {showForm && tab === "coupons" && (
           <Card>
-            <form onSubmit={submitCoupon} className="grid grid-cols-4 gap-3">
+            <form onSubmit={submitCoupon} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
               <input required placeholder="Code (e.g. SAVE50)" value={couponForm.code} onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <select value={couponForm.discountType} onChange={(e) => setCouponForm({ ...couponForm, discountType: e.target.value as Coupon["discountType"] })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
                 <option value="PERCENTAGE">Percentage</option>
@@ -158,8 +158,8 @@ export function Promotions() {
               </select>
               <input required type="number" min="0" placeholder="Value" value={couponForm.discountValue} onChange={(e) => setCouponForm({ ...couponForm, discountValue: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input type="number" min="1" placeholder="Usage limit (optional)" value={couponForm.usageLimit} onChange={(e) => setCouponForm({ ...couponForm, usageLimit: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-              {error && <div className="col-span-4 text-sm font-medium text-brand-warn">{error}</div>}
-              <div className="col-span-4">
+              {error && <div className="col-span-full text-sm font-medium text-brand-warn">{error}</div>}
+              <div className="col-span-full">
                 <Button type="submit">Save coupon</Button>
               </div>
             </form>
@@ -168,55 +168,63 @@ export function Promotions() {
 
         {tab === "promotions" && (
           <Card>
-            <div className="grid grid-cols-5 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-              <span>NAME</span>
-              <span>DISCOUNT</span>
-              <span>STARTS</span>
-              <span>ENDS</span>
-              <span>ACTION</span>
-            </div>
-            {promotions.map((p) => (
-              <div key={p.id} className="grid grid-cols-5 items-center border-b border-brand-border/60 py-2.5 text-sm">
-                <span className="font-semibold text-brand-ink">{p.name}</span>
-                <span>{p.discountPercent ? `${p.discountPercent}%` : currencyFmt.format(Number(p.discountAmount))}</span>
-                <span className="text-brand-inkMuted">{new Date(p.startDate).toLocaleDateString("en-KE")}</span>
-                <span className="text-brand-inkMuted">{new Date(p.endDate).toLocaleDateString("en-KE")}</span>
-                {p.active ? (
-                  <Button variant="danger" className="w-fit px-2 py-1 text-xs" onClick={() => void deactivatePromotion(p.id)}>
-                    Deactivate
-                  </Button>
-                ) : (
-                  <span className="text-xs text-brand-inkMuted">Inactive</span>
-                )}
+            <div className="overflow-x-auto">
+              <div className="min-w-[640px]">
+                <div className="grid grid-cols-5 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                  <span>NAME</span>
+                  <span>DISCOUNT</span>
+                  <span>STARTS</span>
+                  <span>ENDS</span>
+                  <span>ACTION</span>
+                </div>
+                {promotions.map((p) => (
+                  <div key={p.id} className="grid grid-cols-5 items-center border-b border-brand-border/60 py-2.5 text-sm">
+                    <span className="font-semibold text-brand-ink">{p.name}</span>
+                    <span>{p.discountPercent ? `${p.discountPercent}%` : currencyFmt.format(Number(p.discountAmount))}</span>
+                    <span className="text-brand-inkMuted">{new Date(p.startDate).toLocaleDateString("en-KE")}</span>
+                    <span className="text-brand-inkMuted">{new Date(p.endDate).toLocaleDateString("en-KE")}</span>
+                    {p.active ? (
+                      <Button variant="danger" className="w-fit px-2 py-1 text-xs" onClick={() => void deactivatePromotion(p.id)}>
+                        Deactivate
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-brand-inkMuted">Inactive</span>
+                    )}
+                  </div>
+                ))}
+                {promotions.length === 0 && <div className="py-6 text-sm text-brand-inkMuted">No promotions yet.</div>}
               </div>
-            ))}
-            {promotions.length === 0 && <div className="py-6 text-sm text-brand-inkMuted">No promotions yet.</div>}
+            </div>
           </Card>
         )}
 
         {tab === "coupons" && (
           <Card>
-            <div className="grid grid-cols-5 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-              <span>CODE</span>
-              <span>DISCOUNT</span>
-              <span>USAGE</span>
-              <span>STATUS</span>
-              <span>ACTION</span>
-            </div>
-            {coupons.map((c) => (
-              <div key={c.id} className="grid grid-cols-5 items-center border-b border-brand-border/60 py-2.5 text-sm">
-                <span className="font-mono font-semibold text-brand-ink">{c.code}</span>
-                <span>{c.discountType === "PERCENTAGE" ? `${c.discountValue}%` : currencyFmt.format(Number(c.discountValue))}</span>
-                <span className="text-brand-inkMuted">{c.timesUsed}{c.usageLimit ? ` / ${c.usageLimit}` : ""}</span>
-                <span className={c.active ? "text-brand-accentText" : "text-brand-inkMuted"}>{c.active ? "Active" : "Inactive"}</span>
-                {c.active && (
-                  <Button variant="danger" className="w-fit px-2 py-1 text-xs" onClick={() => void deactivateCoupon(c.id)}>
-                    Deactivate
-                  </Button>
-                )}
+            <div className="overflow-x-auto">
+              <div className="min-w-[560px]">
+                <div className="grid grid-cols-5 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                  <span>CODE</span>
+                  <span>DISCOUNT</span>
+                  <span>USAGE</span>
+                  <span>STATUS</span>
+                  <span>ACTION</span>
+                </div>
+                {coupons.map((c) => (
+                  <div key={c.id} className="grid grid-cols-5 items-center border-b border-brand-border/60 py-2.5 text-sm">
+                    <span className="font-mono font-semibold text-brand-ink">{c.code}</span>
+                    <span>{c.discountType === "PERCENTAGE" ? `${c.discountValue}%` : currencyFmt.format(Number(c.discountValue))}</span>
+                    <span className="text-brand-inkMuted">{c.timesUsed}{c.usageLimit ? ` / ${c.usageLimit}` : ""}</span>
+                    <span className={c.active ? "text-brand-accentText" : "text-brand-inkMuted"}>{c.active ? "Active" : "Inactive"}</span>
+                    {c.active && (
+                      <Button variant="danger" className="w-fit px-2 py-1 text-xs" onClick={() => void deactivateCoupon(c.id)}>
+                        Deactivate
+                      </Button>
+                    )}
+                  </div>
+                ))}
+                {coupons.length === 0 && <div className="py-6 text-sm text-brand-inkMuted">No coupons yet.</div>}
               </div>
-            ))}
-            {coupons.length === 0 && <div className="py-6 text-sm text-brand-inkMuted">No coupons yet.</div>}
+            </div>
           </Card>
         )}
       </div>

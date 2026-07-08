@@ -64,7 +64,7 @@ export function CashRegisterPage() {
   return (
     <>
       <Topbar title="Cash Register" subtitle="Open and close your shift, reconcile cash" />
-      <div className="flex flex-1 flex-col gap-6 overflow-auto p-8">
+      <div className="flex flex-1 flex-col gap-6 overflow-auto p-4 sm:p-6 lg:p-8">
         <Card className="max-w-md">
           {session === undefined && <div className="text-sm text-brand-inkMuted">Loading…</div>}
 
@@ -114,24 +114,28 @@ export function CashRegisterPage() {
 
         <Card>
           <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Shift history</div>
-          <div className="grid grid-cols-5 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-            <span>OPENED</span>
-            <span>FLOAT</span>
-            <span>EXPECTED</span>
-            <span>COUNTED</span>
-            <span>VARIANCE</span>
-          </div>
-          {history.map((s) => (
-            <div key={s.id} className="grid grid-cols-5 items-center border-b border-brand-border/60 py-2.5 text-sm">
-              <span>{new Date(s.openedAt).toLocaleDateString("en-KE")}</span>
-              <span>{currencyFmt.format(Number(s.openingFloat))}</span>
-              <span>{s.expectedCash != null ? currencyFmt.format(Number(s.expectedCash)) : "—"}</span>
-              <span>{s.closingCounted != null ? currencyFmt.format(Number(s.closingCounted)) : "—"}</span>
-              <span className={Number(s.variance) < 0 ? "font-semibold text-brand-warn" : "font-semibold text-brand-accentText"}>
-                {s.variance != null ? currencyFmt.format(Number(s.variance)) : "—"}
-              </span>
+          <div className="overflow-x-auto">
+            <div className="min-w-[560px]">
+              <div className="grid grid-cols-5 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                <span>OPENED</span>
+                <span>FLOAT</span>
+                <span>EXPECTED</span>
+                <span>COUNTED</span>
+                <span>VARIANCE</span>
+              </div>
+              {history.map((s) => (
+                <div key={s.id} className="grid grid-cols-5 items-center border-b border-brand-border/60 py-2.5 text-sm">
+                  <span>{new Date(s.openedAt).toLocaleDateString("en-KE")}</span>
+                  <span>{currencyFmt.format(Number(s.openingFloat))}</span>
+                  <span>{s.expectedCash != null ? currencyFmt.format(Number(s.expectedCash)) : "—"}</span>
+                  <span>{s.closingCounted != null ? currencyFmt.format(Number(s.closingCounted)) : "—"}</span>
+                  <span className={Number(s.variance) < 0 ? "font-semibold text-brand-warn" : "font-semibold text-brand-accentText"}>
+                    {s.variance != null ? currencyFmt.format(Number(s.variance)) : "—"}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </Card>
       </div>
     </>

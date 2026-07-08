@@ -65,14 +65,14 @@ export function Employees() {
   return (
     <>
       <Topbar title="Employees" subtitle="Admin and cashier accounts" />
-      <div className="flex flex-1 flex-col gap-4 overflow-auto p-8">
+      <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 sm:p-6 lg:p-8">
         <div className="flex justify-end">
           <Button onClick={() => setShowForm((v) => !v)}>{showForm ? "Cancel" : "Add employee"}</Button>
         </div>
 
         {showForm && (
           <Card>
-            <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-3">
+            <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <input required placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input required type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input required type="password" minLength={8} placeholder="Temporary password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
@@ -83,8 +83,8 @@ export function Employees() {
                   </option>
                 ))}
               </select>
-              {error && <div className="col-span-2 text-sm font-medium text-brand-warn">{error}</div>}
-              <div className="col-span-2">
+              {error && <div className="col-span-full text-sm font-medium text-brand-warn">{error}</div>}
+              <div className="col-span-full">
                 <Button type="submit">Create account</Button>
               </div>
             </form>
@@ -92,27 +92,31 @@ export function Employees() {
         )}
 
         <Card>
-          <div className="grid grid-cols-4 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-            <span>NAME</span>
-            <span>EMAIL</span>
-            <span>ROLE</span>
-            <span>STATUS</span>
-          </div>
-          {employees.map((emp) => (
-            <div key={emp.id} className="grid grid-cols-4 items-center border-b border-brand-border/60 py-2.5 text-sm">
-              <span className="font-semibold text-brand-ink">{emp.name}</span>
-              <span className="text-brand-inkMuted">{emp.email}</span>
-              <span>{ROLE_LABELS[emp.role]}</span>
-              <button
-                onClick={() => void toggleActive(emp)}
-                className={`w-fit rounded-full px-2.5 py-1 text-[11.5px] font-bold ${
-                  emp.active ? "bg-brand-accent/20 text-brand-accentText" : "bg-brand-warnBg text-brand-warn"
-                }`}
-              >
-                {emp.active ? "Active" : "Disabled"}
-              </button>
+          <div className="overflow-x-auto">
+            <div className="min-w-[560px]">
+              <div className="grid grid-cols-4 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                <span>NAME</span>
+                <span>EMAIL</span>
+                <span>ROLE</span>
+                <span>STATUS</span>
+              </div>
+              {employees.map((emp) => (
+                <div key={emp.id} className="grid grid-cols-4 items-center border-b border-brand-border/60 py-2.5 text-sm">
+                  <span className="font-semibold text-brand-ink">{emp.name}</span>
+                  <span className="text-brand-inkMuted">{emp.email}</span>
+                  <span>{ROLE_LABELS[emp.role]}</span>
+                  <button
+                    onClick={() => void toggleActive(emp)}
+                    className={`w-fit rounded-full px-2.5 py-1 text-[11.5px] font-bold ${
+                      emp.active ? "bg-brand-accent/20 text-brand-accentText" : "bg-brand-warnBg text-brand-warn"
+                    }`}
+                  >
+                    {emp.active ? "Active" : "Disabled"}
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </Card>
       </div>
     </>

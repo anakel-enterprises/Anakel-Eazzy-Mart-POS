@@ -32,7 +32,7 @@ export function Settings() {
   return (
     <>
       <Topbar title="Settings" subtitle="Store profile, tax, and currency" />
-      <div className="flex flex-1 flex-col gap-6 overflow-auto p-8">
+      <div className="flex flex-1 flex-col gap-6 overflow-auto p-4 sm:p-6 lg:p-8">
         <Card className="max-w-lg">
           <form onSubmit={handleSubmit} className="flex flex-col gap-3">
             <label className="text-sm">
@@ -47,7 +47,7 @@ export function Settings() {
               <span className="mb-1 block font-medium text-brand-ink">Phone</span>
               <input value={form.phone ?? ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full rounded-lg border border-brand-border px-3 py-2" />
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="text-sm">
                 <span className="mb-1 block font-medium text-brand-ink">Currency</span>
                 <input value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} className="w-full rounded-lg border border-brand-border px-3 py-2" />

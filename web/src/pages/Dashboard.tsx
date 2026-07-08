@@ -41,10 +41,10 @@ export function Dashboard() {
         title="Dashboard"
         subtitle={new Date().toLocaleDateString("en-KE", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
       />
-      <div className="flex flex-1 flex-col gap-6 overflow-auto p-8">
+      <div className="flex flex-1 flex-col gap-6 overflow-auto p-4 sm:p-6 lg:p-8">
         {error && <div className="text-sm font-medium text-brand-warn">{error}</div>}
 
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           <StatCard label="Today's Sales" value={data ? currencyFmt.format(data.todaysSalesTotal) : "—"} delta="Updated live" />
           <StatCard label="Transactions" value={data ? String(data.todaysTransactionCount) : "—"} />
           <StatCard
@@ -56,10 +56,10 @@ export function Dashboard() {
           <StatCard label="Weekly Total" value={data ? currencyFmt.format(data.weeklySales.reduce((s, d) => s + d.total, 0)) : "—"} />
         </div>
 
-        <div className="grid flex-1 grid-cols-[1.4fr_1fr] gap-5">
+        <div className="grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[1.4fr_1fr]">
           <Card className="flex flex-col">
             <div className="mb-4 font-display text-[15px] font-bold text-brand-ink">Weekly Sales</div>
-            <div className="flex flex-1 items-end gap-4 px-2 pb-2">
+            <div className="flex flex-1 items-end gap-2 px-2 pb-2 sm:gap-4">
               {data?.weeklySales.map((d) => (
                 <div key={d.date} className="flex flex-1 flex-col items-center gap-2">
                   <div
@@ -100,29 +100,33 @@ export function Dashboard() {
           <div className="mb-3 flex items-center justify-between">
             <span className="font-display text-[15px] font-bold text-brand-ink">Recent Orders</span>
           </div>
-          <div className="grid grid-cols-[1fr_1.6fr_0.9fr_0.9fr_1fr_0.9fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-            <span>ORDER</span>
-            <span>CASHIER</span>
-            <span>ITEMS</span>
-            <span>TOTAL</span>
-            <span>PAYMENT</span>
-            <span>STATUS</span>
-          </div>
-          {data?.recentSales.map((s) => (
-            <div
-              key={s.id}
-              className="grid grid-cols-[1fr_1.6fr_0.9fr_0.9fr_1fr_0.9fr] items-center border-b border-brand-border/60 py-2.5 text-[13px] text-brand-ink"
-            >
-              <span className="font-semibold">{s.id.slice(0, 8)}</span>
-              <span>{s.cashier.name}</span>
-              <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
-              <span className="font-semibold">{currencyFmt.format(s.total)}</span>
-              <span>{s.paymentMethod}</span>
-              <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
-                {s.status}
-              </span>
+          <div className="overflow-x-auto">
+            <div className="min-w-[640px]">
+              <div className="grid grid-cols-[1fr_1.6fr_0.9fr_0.9fr_1fr_0.9fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                <span>ORDER</span>
+                <span>CASHIER</span>
+                <span>ITEMS</span>
+                <span>TOTAL</span>
+                <span>PAYMENT</span>
+                <span>STATUS</span>
+              </div>
+              {data?.recentSales.map((s) => (
+                <div
+                  key={s.id}
+                  className="grid grid-cols-[1fr_1.6fr_0.9fr_0.9fr_1fr_0.9fr] items-center border-b border-brand-border/60 py-2.5 text-[13px] text-brand-ink"
+                >
+                  <span className="font-semibold">{s.id.slice(0, 8)}</span>
+                  <span>{s.cashier.name}</span>
+                  <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
+                  <span className="font-semibold">{currencyFmt.format(s.total)}</span>
+                  <span>{s.paymentMethod}</span>
+                  <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
+                    {s.status}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </Card>
       </div>
     </>
