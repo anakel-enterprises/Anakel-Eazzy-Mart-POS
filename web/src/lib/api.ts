@@ -50,6 +50,17 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, timeo
     } catch {
       // response body wasn't JSON — fall back to statusText
     }
+
+    // A 401 here means the session is actually invalid (bad/expired token,
+    // or the account was disabled) — previously this just made every page
+    // silently render empty lists with no indication why. Clear the stale
+    // session and let AuthContext/ProtectedRoutes redirect to login instead.
+    if (res.status === 401) {
+      localStorage.removeItem("auth_token");
+      localStorage.removeItem("auth_user");
+      window.dispatchEvent(new Event("auth:session-expired"));
+    }
+
     throw new ApiError(res.status, message);
   }
 

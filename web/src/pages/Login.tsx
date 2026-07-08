@@ -5,7 +5,7 @@ import { ApiError } from "../lib/api";
 import { Button } from "../components/ui";
 
 export function Login() {
-  const { login } = useAuth();
+  const { login, sessionExpired } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -65,6 +65,11 @@ export function Login() {
           />
         </label>
 
+        {!error && sessionExpired && (
+          <div className="mb-4 rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+            Your session expired — please log in again.
+          </div>
+        )}
         {error && <div className="mb-4 text-sm font-medium text-brand-warn">{error}</div>}
 
         <Button type="submit" disabled={submitting} className="w-full">
