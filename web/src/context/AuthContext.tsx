@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
-import { refreshProductCache } from "../lib/sync";
+import { refreshProductCache, refreshTaxRate } from "../lib/sync";
 
 export interface AuthUser {
   id: string;
@@ -38,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("auth_user", JSON.stringify(result.user));
     setUser(result.user);
     void refreshProductCache();
+    void refreshTaxRate();
   }
 
   function logout() {

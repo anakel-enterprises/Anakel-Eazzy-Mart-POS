@@ -160,6 +160,71 @@ reportsRouter.get(
   })
 );
 
+// A proper Profit & Loss statement for an arbitrary period (day/week/month,
+// or any custom from/to). Unlike /profit, revenue here is net of discounts
+// (subtotal - discountTotal) since that's what actually counts as sales
+// revenue on a P&L — tax collected on behalf of the government isn't revenue
+// either, so it's excluded too.
+reportsRouter.get(
+  "/profit-loss",
+  asyncHandler(async (req, res) => {
+    const storeId = req.auth!.storeId;
+    const { from, to } = req.query;
+    const range = dateRangeWhere(from, to);
+
+    const [salesAgg, saleItems, incomeAgg, expenses] = await Promise.all([
+      prisma.sale.aggregate({
+        where: { storeId, status: "COMPLETED", ...range },
+        _sum: { subtotal: true, discountTotal: true },
+        _count: true,
+      }),
+      prisma.saleItem.findMany({
+        where: { sale: { storeId, status: "COMPLETED", ...range } },
+        select: { quantity: true, product: { select: { cost: true } } },
+      }),
+      prisma.income.aggregate({
+        where: { storeId, ...(from || to ? { date: range.createdAt } : {}) },
+        _sum: { amount: true },
+      }),
+      prisma.expense.findMany({
+        where: { storeId, status: "APPROVED", ...(from || to ? { date: range.createdAt } : {}) },
+        include: { category: true },
+      }),
+    ]);
+
+    const netSales = (salesAgg._sum.subtotal ?? new Prisma.Decimal(0)).sub(
+      salesAgg._sum.discountTotal ?? new Prisma.Decimal(0)
+    );
+    const cogs = saleItems.reduce(
+      (sum, item) => sum.add((item.product.cost ?? new Prisma.Decimal(0)).mul(item.quantity)),
+      new Prisma.Decimal(0)
+    );
+    const grossProfit = netSales.sub(cogs);
+    const otherIncome = incomeAgg._sum.amount ?? new Prisma.Decimal(0);
+
+    const expensesByCategory = new Map<string, Prisma.Decimal>();
+    let totalExpenses = new Prisma.Decimal(0);
+    for (const e of expenses) {
+      totalExpenses = totalExpenses.add(e.amount);
+      const key = e.category.name;
+      expensesByCategory.set(key, (expensesByCategory.get(key) ?? new Prisma.Decimal(0)).add(e.amount));
+    }
+
+    const netProfit = grossProfit.add(otherIncome).sub(totalExpenses);
+
+    res.json({
+      transactionCount: salesAgg._count,
+      netSales,
+      cogs,
+      grossProfit,
+      otherIncome,
+      expensesByCategory: Array.from(expensesByCategory.entries()).map(([category, amount]) => ({ category, amount })),
+      totalExpenses,
+      netProfit,
+    });
+  })
+);
+
 reportsRouter.get(
   "/inventory",
   asyncHandler(async (req, res) => {

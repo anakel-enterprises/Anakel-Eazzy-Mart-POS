@@ -13,6 +13,11 @@ const saleItemSchema = z.object({
   quantity: z.number().int().positive(),
 });
 
+const splitPaymentSchema = z.object({
+  method: z.enum(["CASH", "MPESA", "CARD", "BANK"]),
+  amount: z.number().positive(),
+});
+
 const createSaleSchema = z.object({
   clientId: z.string().min(1),
   items: z.array(saleItemSchema).min(1),
@@ -23,7 +28,10 @@ const createSaleSchema = z.object({
   customerId: z.string().optional(),
   couponCode: z.string().optional(),
   creditDueDate: z.string().datetime().optional(),
+  splitPayments: z.array(splitPaymentSchema).optional(),
 });
+
+const ROUNDING_TOLERANCE = 0.01;
 
 const DEFAULT_CREDIT_DAYS = 30;
 
@@ -46,6 +54,11 @@ salesRouter.post(
 
     if (data.paymentMethod === "CREDIT" && !data.customerId) {
       res.status(400).json({ error: "A customer is required for credit sales" });
+      return;
+    }
+
+    if (data.paymentMethod === "SPLIT" && (!data.splitPayments || data.splitPayments.length < 2)) {
+      res.status(400).json({ error: "Split payments need at least two payment methods" });
       return;
     }
 
@@ -149,7 +162,26 @@ salesRouter.post(
     const taxableAmount = subtotal.sub(discountTotal);
     const taxTotal = data.status === "COMPLETED" ? taxableAmount.mul(store.taxRate).div(100) : new Prisma.Decimal(0);
     const total = taxableAmount.add(taxTotal);
-    const amountTendered = data.amountTendered != null ? new Prisma.Decimal(data.amountTendered) : null;
+    // Split amounts only need to *cover* the total, not match it exactly —
+    // the client can't predict the exact tax/discount-inclusive total in
+    // advance (tax and any active promotions/coupons are computed here),
+    // so requiring an exact match would make split payment unusable. Same
+    // tolerance-for-shortfall, allow-overage pattern as cash tendering.
+    let splitAmountTendered: Prisma.Decimal | null = null;
+    if (data.paymentMethod === "SPLIT" && data.status === "COMPLETED") {
+      const splitSum = data.splitPayments!.reduce((sum, p) => sum + p.amount, 0);
+      if (splitSum - Number(total) < -ROUNDING_TOLERANCE) {
+        res.status(400).json({
+          error: `Split payments (${splitSum.toFixed(2)}) don't cover the total (${total.toFixed(2)})`,
+          total: total.toFixed(2),
+        });
+        return;
+      }
+      splitAmountTendered = new Prisma.Decimal(splitSum);
+    }
+
+    const amountTendered =
+      splitAmountTendered ?? (data.amountTendered != null ? new Prisma.Decimal(data.amountTendered) : null);
     const changeDue = amountTendered ? amountTendered.sub(total) : null;
 
     if (data.paymentMethod === "CREDIT" && customer && customer.creditLimit.gt(0)) {
@@ -187,8 +219,12 @@ salesRouter.post(
           creditDueDate,
           createdAt: data.createdAt ? new Date(data.createdAt) : undefined,
           items: { create: lineItems },
+          splitPayments:
+            data.paymentMethod === "SPLIT" && data.status === "COMPLETED"
+              ? { create: data.splitPayments!.map((p) => ({ method: p.method, amount: p.amount })) }
+              : undefined,
         },
-        include: { items: true },
+        include: { items: true, splitPayments: true },
       });
 
       if (data.status === "COMPLETED") {

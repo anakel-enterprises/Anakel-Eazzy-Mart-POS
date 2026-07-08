@@ -1,4 +1,4 @@
-import { api, ApiError } from "./api";
+import { api, ApiError, isApiReachable } from "./api";
 import { localDb, type CachedProduct, type PendingSale } from "../db/localDb";
 
 interface ServerProduct {
@@ -13,7 +13,9 @@ interface ServerProduct {
 }
 
 // Pulls the current catalog down so checkout can search/price products with
-// no connection. Called on login and whenever the app comes back online.
+// no connection. Called on login, whenever the app comes back online, and
+// periodically while online (see startBackgroundSync) so prices/stock/new
+// promotions don't go stale across a long open session.
 export async function refreshProductCache(): Promise<void> {
   const products = await api.get<ServerProduct[]>("/api/products");
   const cached: CachedProduct[] = products.map((p) => ({
@@ -33,17 +35,35 @@ export async function refreshProductCache(): Promise<void> {
   });
 }
 
+const TAX_RATE_KEY = "cached_tax_rate";
+
+// Cached in localStorage (not Dexie — it's one small number) so the
+// checkout total estimate is still accurate offline. Tax is computed
+// authoritatively server-side on sync either way; this is only used to show
+// the cashier a close-enough total (and a sane split-payment starting
+// point) instead of a bare pre-tax subtotal.
+export async function refreshTaxRate(): Promise<void> {
+  const store = await api.get<{ taxRate: string | number }>("/api/settings");
+  localStorage.setItem(TAX_RATE_KEY, String(store.taxRate));
+}
+
+export function getCachedTaxRate(): number {
+  const raw = localStorage.getItem(TAX_RATE_KEY);
+  return raw ? Number(raw) : 0;
+}
+
 export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncError">): Promise<void> {
   await localDb.pendingSales.put({ ...sale, syncStatus: "pending" });
-  if (navigator.onLine) {
-    void flushPendingSales();
-  }
+  void flushPendingSales();
 }
 
 let flushing = false;
 
 // Idempotent via clientId server-side, so re-running this after a partial
-// failure (e.g. network drops mid-flush) never double-books a sale.
+// failure (e.g. network drops mid-flush) never double-books a sale. Checks
+// real reachability first rather than trusting navigator.onLine, which only
+// reports whether some network interface is up — a device can be "online"
+// on a WiFi router with no actual internet, or mid-captive-portal.
 export async function flushPendingSales(): Promise<{ synced: number; failed: number }> {
   if (flushing) return { synced: 0, failed: 0 };
   flushing = true;
@@ -51,6 +71,8 @@ export async function flushPendingSales(): Promise<{ synced: number; failed: num
   let failed = 0;
 
   try {
+    if (!(await isApiReachable())) return { synced: 0, failed: 0 };
+
     const pending = await localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray();
     for (const sale of pending) {
       try {
@@ -63,6 +85,7 @@ export async function flushPendingSales(): Promise<{ synced: number; failed: num
           createdAt: sale.createdAt,
           customerId: sale.customerId,
           couponCode: sale.couponCode,
+          splitPayments: sale.splitPayments,
         });
         await localDb.pendingSales.update(sale.clientId, { syncStatus: "synced" });
         synced++;
@@ -72,6 +95,8 @@ export async function flushPendingSales(): Promise<{ synced: number; failed: num
         failed++;
       }
     }
+
+    if (synced > 0) void refreshProductCache();
   } finally {
     flushing = false;
   }
@@ -79,8 +104,35 @@ export async function flushPendingSales(): Promise<{ synced: number; failed: num
   return { synced, failed };
 }
 
-export function registerSyncListeners(): () => void {
-  const handler = () => void flushPendingSales();
-  window.addEventListener("online", handler);
-  return () => window.removeEventListener("online", handler);
+const RETRY_INTERVAL_MS = 25_000;
+const CACHE_REFRESH_INTERVAL_MS = 5 * 60_000;
+
+// Two things browser 'online'/'offline' events don't cover: connectivity
+// that flickers back without a fresh event firing (the tab was already
+// "online" per navigator.onLine the whole time), and a stock/price catalog
+// that quietly drifts stale over a long open session. Both are handled by
+// polling on a timer instead of relying solely on events.
+export function startBackgroundSync(): () => void {
+  const onlineHandler = () => void flushPendingSales();
+  window.addEventListener("online", onlineHandler);
+
+  let lastCacheRefresh = 0;
+  const interval = setInterval(() => {
+    void flushPendingSales();
+    const now = Date.now();
+    if (now - lastCacheRefresh > CACHE_REFRESH_INTERVAL_MS) {
+      lastCacheRefresh = now;
+      void isApiReachable().then((reachable) => {
+        if (reachable) {
+          void refreshProductCache();
+          void refreshTaxRate();
+        }
+      });
+    }
+  }, RETRY_INTERVAL_MS);
+
+  return () => {
+    window.removeEventListener("online", onlineHandler);
+    clearInterval(interval);
+  };
 }

@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { localDb, newClientId, type CachedProduct } from "../db/localDb";
-import { queueSale, refreshProductCache } from "../lib/sync";
-import { api } from "../lib/api";
+import { localDb, newClientId, type CachedProduct, type SplitPaymentEntry } from "../db/localDb";
+import { getCachedTaxRate, queueSale, refreshProductCache, refreshTaxRate } from "../lib/sync";
+import { api, isApiReachable } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 
@@ -24,31 +24,45 @@ interface CustomerOption {
 }
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
-const PAYMENT_METHODS = ["CASH", "MPESA", "CARD", "BANK", "CREDIT"] as const;
+const PAYMENT_METHODS = ["CASH", "MPESA", "CARD", "BANK", "SPLIT", "CREDIT"] as const;
+const SPLIT_METHODS = ["CASH", "MPESA", "CARD", "BANK"] as const;
 
 export function Checkout() {
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<CartLine[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<(typeof PAYMENT_METHODS)[number]>("CASH");
   const [amountTendered, setAmountTendered] = useState("");
+  const [splitRows, setSplitRows] = useState<SplitPaymentEntry[]>([
+    { method: "CASH", amount: 0 },
+    { method: "MPESA", amount: 0 },
+  ]);
   const [receipt, setReceipt] = useState<{ total: number; change: number } | null>(null);
   const [showScanner, setShowScanner] = useState(false);
   const [couponCode, setCouponCode] = useState("");
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
+  const [showHeld, setShowHeld] = useState(false);
 
   useEffect(() => {
-    if (navigator.onLine) void refreshProductCache();
+    void isApiReachable().then((reachable) => {
+      if (reachable) {
+        void refreshProductCache();
+        void refreshTaxRate();
+      }
+    });
   }, []);
 
   useEffect(() => {
-    if (paymentMethod !== "CREDIT" || !customerQuery.trim() || !navigator.onLine) {
+    if (paymentMethod !== "CREDIT" || !customerQuery.trim()) {
       setCustomerOptions([]);
       return;
     }
     const handle = setTimeout(() => {
-      void api.get<CustomerOption[]>(`/api/customers?q=${encodeURIComponent(customerQuery)}`).then(setCustomerOptions);
+      void api
+        .get<CustomerOption[]>(`/api/customers?q=${encodeURIComponent(customerQuery)}`)
+        .then(setCustomerOptions)
+        .catch(() => setCustomerOptions([]));
     }, 250);
     return () => clearTimeout(handle);
   }, [customerQuery, paymentMethod]);
@@ -62,10 +76,22 @@ export function Checkout() {
       .slice(0, 8);
   }, [query]);
 
+  const heldSales = useLiveQuery(() => localDb.heldSales.orderBy("createdAt").reverse().toArray(), [], []);
+
   const subtotal = useMemo(() => cart.reduce((sum, l) => sum + l.product.price * l.quantity, 0), [cart]);
-  const total = subtotal; // tax is computed server-side on sync using the store's tax rate
+  const taxRate = getCachedTaxRate();
+  // Estimated, not authoritative — the server is the source of truth and
+  // additionally applies any active promotions/coupon, which this doesn't
+  // know about. Close enough to give the cashier a real number to work
+  // from instead of a bare pre-tax subtotal, and split payments only need
+  // to *cover* the server-computed total (see sales.ts), so an estimate
+  // that's a little high from ignoring discounts is safe either way.
+  const estimatedTax = Math.round(subtotal * (taxRate / 100) * 100) / 100;
+  const total = Math.round((subtotal + estimatedTax) * 100) / 100;
   const tendered = Number(amountTendered) || 0;
   const changeDue = paymentMethod === "CASH" ? Math.max(tendered - total, 0) : 0;
+  const splitAllocated = splitRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+  const splitRemaining = Math.round((total - splitAllocated) * 100) / 100;
 
   function addToCart(product: CachedProduct) {
     setCart((prev) => {
@@ -84,41 +110,87 @@ export function Checkout() {
     );
   }
 
-  async function completeSale(status: "HELD" | "COMPLETED") {
+  function resetPaymentState() {
+    setCart([]);
+    setAmountTendered("");
+    setCouponCode("");
+    setCustomer(null);
+    setCustomerQuery("");
+    setSplitRows([
+      { method: "CASH", amount: 0 },
+      { method: "MPESA", amount: 0 },
+    ]);
+  }
+
+  async function holdSale() {
+    if (cart.length === 0) return;
+    await localDb.heldSales.put({
+      id: newClientId(),
+      items: cart.map((l) => ({ productId: l.product.id, name: l.product.name, quantity: l.quantity, unitPrice: l.product.price })),
+      createdAt: new Date().toISOString(),
+    });
+    resetPaymentState();
+  }
+
+  async function resumeHeldSale(id: string) {
+    const held = await localDb.heldSales.get(id);
+    if (!held) return;
+    // Merges into whatever's already in the cart rather than replacing it,
+    // so resuming a hold never silently drops an in-progress sale.
+    for (const item of held.items) {
+      const product = await localDb.products.get(item.productId);
+      if (!product) continue;
+      setCart((prev) => {
+        const existing = prev.find((l) => l.product.id === product.id);
+        if (existing) {
+          return prev.map((l) => (l.product.id === product.id ? { ...l, quantity: l.quantity + item.quantity } : l));
+        }
+        return [...prev, { product, quantity: item.quantity }];
+      });
+    }
+    await localDb.heldSales.delete(id);
+    setShowHeld(false);
+  }
+
+  async function discardHeldSale(id: string) {
+    await localDb.heldSales.delete(id);
+  }
+
+  async function completeSale() {
     if (cart.length === 0) return;
     if (paymentMethod === "CREDIT" && !customer) return;
+    if (paymentMethod === "SPLIT" && splitRemaining > 0.01) return;
+
     const clientId = newClientId();
     await queueSale({
       clientId,
       items: cart.map((l) => ({ productId: l.product.id, name: l.product.name, quantity: l.quantity, unitPrice: l.product.price })),
       paymentMethod,
       amountTendered: paymentMethod === "CASH" ? tendered : undefined,
-      status,
+      status: "COMPLETED",
       createdAt: new Date().toISOString(),
       customerId: customer?.id,
       couponCode: couponCode.trim() || undefined,
+      splitPayments: paymentMethod === "SPLIT" ? splitRows.filter((r) => r.amount > 0) : undefined,
     });
 
-    if (status === "COMPLETED") {
-      await localDb.transaction("rw", localDb.products, async () => {
-        for (const line of cart) {
-          const p = await localDb.products.get(line.product.id);
-          if (p) await localDb.products.update(p.id, { stockQty: p.stockQty - line.quantity });
-        }
-      });
-      setReceipt({ total, change: changeDue });
-    }
-
-    setCart([]);
-    setAmountTendered("");
-    setCouponCode("");
-    setCustomer(null);
-    setCustomerQuery("");
+    await localDb.transaction("rw", localDb.products, async () => {
+      for (const line of cart) {
+        const p = await localDb.products.get(line.product.id);
+        if (p) await localDb.products.update(p.id, { stockQty: p.stockQty - line.quantity });
+      }
+    });
+    setReceipt({ total, change: changeDue });
+    resetPaymentState();
   }
 
   function handleScan(value: string) {
     setShowScanner(false);
     setQuery(value);
+  }
+
+  function updateSplitRow(index: number, patch: Partial<SplitPaymentEntry>) {
+    setSplitRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
   return (
@@ -136,6 +208,14 @@ export function Checkout() {
             />
             <Button variant="secondary" onClick={() => setShowScanner(true)}>
               Scan
+            </Button>
+            <Button variant="secondary" onClick={() => setShowHeld(true)} className="relative">
+              Held sales
+              {heldSales.length > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-warn text-[10px] font-bold text-white">
+                  {heldSales.length}
+                </span>
+              )}
             </Button>
           </div>
           {results && results.length > 0 && (
@@ -189,7 +269,7 @@ export function Checkout() {
           </Card>
         </div>
 
-        <Card className="flex flex-col gap-4">
+        <Card className="flex flex-col gap-4 overflow-auto">
           <div className="font-display text-[15px] font-bold text-brand-ink">Payment</div>
 
           <div className="flex flex-wrap gap-2">
@@ -217,6 +297,56 @@ export function Checkout() {
                 className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
               />
             </label>
+          )}
+
+          {paymentMethod === "SPLIT" && (
+            <div className="flex flex-col gap-2 text-sm">
+              <span className="font-medium text-brand-ink">Split across methods</span>
+              {splitRows.map((row, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <select
+                    value={row.method}
+                    onChange={(e) => updateSplitRow(i, { method: e.target.value as SplitPaymentEntry["method"] })}
+                    className="rounded-lg border border-brand-border px-2 py-2 text-sm"
+                  >
+                    {SPLIT_METHODS.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    value={row.amount || ""}
+                    onChange={(e) => updateSplitRow(i, { amount: Number(e.target.value) || 0 })}
+                    placeholder="Amount"
+                    className="flex-1 rounded-lg border border-brand-border px-3 py-2"
+                  />
+                  {splitRows.length > 2 && (
+                    <button
+                      onClick={() => setSplitRows((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="text-brand-inkMuted hover:text-brand-warn"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                onClick={() => setSplitRows((prev) => [...prev, { method: "CASH", amount: 0 }])}
+                className="w-fit text-xs font-semibold text-brand-accentText"
+              >
+                + Add another method
+              </button>
+              <div className={`text-xs font-semibold ${splitRemaining > 0.01 ? "text-brand-warn" : "text-brand-accentText"}`}>
+                {splitRemaining > 0.01
+                  ? `${currencyFmt.format(splitRemaining)} remaining`
+                  : splitRemaining < -0.01
+                    ? `${currencyFmt.format(-splitRemaining)} over the total`
+                    : "Fully allocated"}
+              </div>
+            </div>
           )}
 
           {paymentMethod === "CREDIT" && (
@@ -255,6 +385,7 @@ export function Checkout() {
                   )}
                 </div>
               )}
+              <p className="mt-1 text-xs text-brand-inkMuted">Customer lookup requires a connection.</p>
             </div>
           )}
 
@@ -274,11 +405,11 @@ export function Checkout() {
               <span>{currencyFmt.format(subtotal)}</span>
             </div>
             <div className="flex justify-between text-sm text-brand-inkMuted">
-              <span>Tax</span>
-              <span>Calculated on sync</span>
+              <span>Tax ({taxRate}%, estimated)</span>
+              <span>{currencyFmt.format(estimatedTax)}</span>
             </div>
             <div className="flex justify-between font-display text-lg font-bold text-brand-ink">
-              <span>Total</span>
+              <span>Total (estimated)</span>
               <span>{currencyFmt.format(total)}</span>
             </div>
             {paymentMethod === "CASH" && (
@@ -290,13 +421,17 @@ export function Checkout() {
           </div>
 
           <div className="flex gap-3">
-            <Button variant="secondary" className="flex-1" onClick={() => void completeSale("HELD")} disabled={cart.length === 0}>
+            <Button variant="secondary" className="flex-1" onClick={() => void holdSale()} disabled={cart.length === 0}>
               Hold sale
             </Button>
             <Button
               className="flex-1"
-              onClick={() => void completeSale("COMPLETED")}
-              disabled={cart.length === 0 || (paymentMethod === "CREDIT" && !customer)}
+              onClick={() => void completeSale()}
+              disabled={
+                cart.length === 0 ||
+                (paymentMethod === "CREDIT" && !customer) ||
+                (paymentMethod === "SPLIT" && splitRemaining > 0.01)
+              }
             >
               Complete sale
             </Button>
@@ -318,6 +453,44 @@ export function Checkout() {
             <Button className="w-full" onClick={() => setReceipt(null)}>
               New sale
             </Button>
+          </Card>
+        </div>
+      )}
+
+      {showHeld && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/40">
+          <Card className="w-96 max-h-[80vh] overflow-auto">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="font-display text-lg font-bold text-brand-ink">Held sales</span>
+              <button onClick={() => setShowHeld(false)} className="text-sm text-brand-inkMuted hover:text-brand-ink">
+                ✕
+              </button>
+            </div>
+            {heldSales.length === 0 && <div className="py-6 text-center text-sm text-brand-inkMuted">No held sales on this device.</div>}
+            <div className="flex flex-col gap-2">
+              {heldSales.map((h) => {
+                const itemCount = h.items.reduce((sum, i) => sum + i.quantity, 0);
+                const heldTotal = h.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+                return (
+                  <div key={h.id} className="flex items-center justify-between rounded-lg bg-brand-bg px-3 py-2.5">
+                    <div>
+                      <div className="text-sm font-semibold text-brand-ink">
+                        {itemCount} item{itemCount === 1 ? "" : "s"} · {currencyFmt.format(heldTotal)}
+                      </div>
+                      <div className="text-xs text-brand-inkMuted">{new Date(h.createdAt).toLocaleTimeString("en-KE")}</div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button className="px-3 py-1.5 text-xs" onClick={() => void resumeHeldSale(h.id)}>
+                        Resume
+                      </Button>
+                      <Button variant="danger" className="px-3 py-1.5 text-xs" onClick={() => void discardHeldSale(h.id)}>
+                        Discard
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </Card>
         </div>
       )}
