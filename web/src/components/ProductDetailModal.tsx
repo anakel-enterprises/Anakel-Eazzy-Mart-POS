@@ -36,24 +36,28 @@ export function ProductDetailModal({
   const [price, setPrice] = useState(String(product.price));
   const [cost, setCost] = useState(product.cost != null ? String(product.cost) : "");
   const [lowStockThreshold, setLowStockThreshold] = useState(String(product.lowStockThreshold));
-  const [qty, setQty] = useState(String(product.stockQty));
+  // The amount to add (or, if negative, remove) on top of the current stock
+  // — not the new absolute total. Starts at 0 so Save is a no-op by default.
+  const [delta, setDelta] = useState("0");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function step(delta: number) {
-    setQty((prev) => String(Math.max(0, Math.trunc(Number(prev) || 0) + delta)));
+  const deltaNum = Math.trunc(Number(delta)) || 0;
+  const newStockQty = product.stockQty + deltaNum;
+
+  function step(amount: number) {
+    setDelta((prev) => String(Math.max(-product.stockQty, (Math.trunc(Number(prev)) || 0) + amount)));
   }
 
   async function handleSave() {
     setError(null);
     const priceNum = Number(price);
-    const qtyNum = Math.max(0, Math.trunc(Number(qty)));
     if (!name.trim() || Number.isNaN(priceNum) || priceNum <= 0) {
       setError("Enter a product name and a valid selling price.");
       return;
     }
-    if (Number.isNaN(qtyNum)) {
-      setError("Enter a valid stock quantity.");
+    if (Number.isNaN(Number(delta)) || newStockQty < 0) {
+      setError(`That would take stock below zero (currently ${product.stockQty}).`);
       return;
     }
     setSaving(true);
@@ -66,10 +70,9 @@ export function ProductDetailModal({
         lowStockThreshold: Number(lowStockThreshold) || 0,
       });
 
-      const delta = qtyNum - product.stockQty;
-      if (delta !== 0) {
+      if (deltaNum !== 0) {
         await api.post(`/api/products/${product.id}/adjustments`, {
-          quantityDelta: delta,
+          quantityDelta: deltaNum,
           reason: "MANUAL_CORRECTION",
         });
       }
@@ -130,7 +133,7 @@ export function ProductDetailModal({
           </label>
 
           <div>
-            <span className="mb-1 block text-sm font-medium text-brand-ink">Stock quantity</span>
+            <span className="mb-1 block text-sm font-medium text-brand-ink">Adjust stock (currently {product.stockQty})</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -141,9 +144,8 @@ export function ProductDetailModal({
               </button>
               <input
                 type="number"
-                min="0"
-                value={qty}
-                onChange={(e) => setQty(e.target.value)}
+                value={delta}
+                onChange={(e) => setDelta(e.target.value)}
                 className="w-full rounded-lg border border-brand-border px-3 py-2 text-center"
               />
               <button
@@ -154,7 +156,11 @@ export function ProductDetailModal({
                 +
               </button>
             </div>
-            <div className="mt-1 text-xs text-brand-inkMuted">Currently {product.stockQty} in stock</div>
+            <div className="mt-1 text-xs text-brand-inkMuted">
+              {deltaNum === 0
+                ? "No change to stock"
+                : `New stock will be ${newStockQty} (${deltaNum > 0 ? "+" : ""}${deltaNum})`}
+            </div>
           </div>
 
           {error && <div className="text-sm font-medium text-brand-warn">{error}</div>}

@@ -25,6 +25,18 @@ interface Category {
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
 
+function slugifySku(name: string): string {
+  return name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "ITEM";
+}
+
+function generateSku(name: string, existingSkus: Set<string>): string {
+  const base = slugifySku(name);
+  if (!existingSkus.has(base)) return base;
+  let n = 2;
+  while (existingSkus.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
 const emptyForm = {
   name: "",
   sku: "",
@@ -47,6 +59,17 @@ export function Inventory() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showLabels, setShowLabels] = useState(false);
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+  // Tracks whether the user has hand-edited the SKU, so typing the name
+  // keeps auto-generating it until they intentionally override it.
+  const [skuTouched, setSkuTouched] = useState(false);
+
+  function handleNameChange(name: string) {
+    setForm((prev) => ({
+      ...prev,
+      name,
+      sku: skuTouched || !name.trim() ? prev.sku : generateSku(name, new Set(products.map((p) => p.sku.toUpperCase()))),
+    }));
+  }
 
   function toggleSelected(id: string) {
     setSelectedIds((prev) => {
@@ -84,6 +107,7 @@ export function Inventory() {
         lowStockThreshold: Number(form.lowStockThreshold) || 5,
       });
       setForm(emptyForm);
+      setSkuTouched(false);
       setShowForm(false);
       await load();
     } catch {
@@ -103,14 +127,33 @@ export function Inventory() {
           >
             Print barcodes ({selectedIds.size})
           </Button>
-          <Button onClick={() => setShowForm((v) => !v)}>{showForm ? "Cancel" : "Add product"}</Button>
+          <Button
+            onClick={() => {
+              if (showForm) {
+                setForm(emptyForm);
+                setSkuTouched(false);
+              }
+              setShowForm((v) => !v);
+            }}
+          >
+            {showForm ? "Cancel" : "Add product"}
+          </Button>
         </div>
 
         {showForm && (
           <Card>
             <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-              <input required placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-              <input required placeholder="SKU" value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+              <input required placeholder="Name" value={form.name} onChange={(e) => handleNameChange(e.target.value)} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+              <input
+                required
+                placeholder="SKU (auto-generated — edit if needed)"
+                value={form.sku}
+                onChange={(e) => {
+                  setSkuTouched(true);
+                  setForm({ ...form, sku: e.target.value });
+                }}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              />
               <input placeholder="Barcode" value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
                 <option value="">No category</option>
