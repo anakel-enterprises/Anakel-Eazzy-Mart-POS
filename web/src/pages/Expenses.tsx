@@ -32,7 +32,7 @@ const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency
 
 export function Expenses() {
   const { user } = useAuth();
-  const canDecide = user?.role === "ADMIN" || user?.role === "MANAGER" || user?.role === "ACCOUNTANT";
+  const canDecide = user?.role === "ADMIN" || !!user?.permissions?.MANAGE_EXPENSES;
   const [tab, setTab] = useState<"expenses" | "income">("expenses");
   const [categories, setCategories] = useState<Category[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);

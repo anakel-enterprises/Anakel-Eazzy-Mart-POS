@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export const productsRouter = Router();
 productsRouter.use(requireAuth);
@@ -50,7 +50,7 @@ const productSchema = z.object({
 
 productsRouter.post(
   "/",
-  requireRole("ADMIN", "MANAGER", "STOREKEEPER"),
+  requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const data = productSchema.parse(req.body);
     const product = await prisma.product.create({
@@ -62,7 +62,7 @@ productsRouter.post(
 
 productsRouter.put(
   "/:id",
-  requireRole("ADMIN", "MANAGER", "STOREKEEPER"),
+  requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const data = productSchema.partial().parse(req.body);
     const existing = await prisma.product.findFirst({
@@ -79,7 +79,7 @@ productsRouter.put(
 
 productsRouter.delete(
   "/:id",
-  requireRole("ADMIN", "MANAGER", "STOREKEEPER"),
+  requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const existing = await prisma.product.findFirst({
       where: { id: req.params.id, storeId: req.auth!.storeId },
@@ -101,7 +101,7 @@ const adjustmentSchema = z.object({
 
 productsRouter.post(
   "/:id/adjustments",
-  requireRole("ADMIN", "MANAGER", "STOREKEEPER"),
+  requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const data = adjustmentSchema.parse(req.body);
     const product = await prisma.product.findFirst({

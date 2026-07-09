@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { signToken } from "../lib/auth.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { requireAuth } from "../middleware/auth.js";
+import { resolvePermissions } from "../lib/permissions.js";
 
 export const authRouter = Router();
 
@@ -33,7 +34,14 @@ authRouter.post(
     const token = signToken({ userId: user.id, storeId: user.storeId, role: user.role });
     res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role, storeId: user.storeId },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        storeId: user.storeId,
+        permissions: resolvePermissions(user.role, user.permissions),
+      },
     });
   })
 );
@@ -47,6 +55,13 @@ authRouter.get(
       res.status(404).json({ error: "User not found" });
       return;
     }
-    res.json({ id: user.id, name: user.name, email: user.email, role: user.role, storeId: user.storeId });
+    res.json({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      storeId: user.storeId,
+      permissions: resolvePermissions(user.role, user.permissions),
+    });
   })
 );

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export const categoriesRouter = Router();
 categoriesRouter.use(requireAuth);
@@ -22,7 +22,7 @@ const categorySchema = z.object({ name: z.string().min(1) });
 
 categoriesRouter.post(
   "/",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const { name } = categorySchema.parse(req.body);
     const category = await prisma.category.create({
@@ -34,7 +34,7 @@ categoriesRouter.post(
 
 categoriesRouter.put(
   "/:id",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const { name } = categorySchema.parse(req.body);
     const existing = await prisma.category.findFirst({
@@ -51,7 +51,7 @@ categoriesRouter.put(
 
 categoriesRouter.delete(
   "/:id",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const existing = await prisma.category.findFirst({
       where: { id: req.params.id, storeId: req.auth!.storeId },

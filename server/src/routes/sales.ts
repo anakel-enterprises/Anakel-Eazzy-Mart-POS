@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export const salesRouter = Router();
 salesRouter.use(requireAuth);
@@ -39,7 +39,7 @@ const DEFAULT_CREDIT_DAYS = 30;
 // gets double-counted or double-decrements stock.
 salesRouter.post(
   "/",
-  requireRole("ADMIN", "MANAGER", "CASHIER"),
+  requirePermission("MAKE_SALES"),
   asyncHandler(async (req, res) => {
     const data = createSaleSchema.parse(req.body);
 

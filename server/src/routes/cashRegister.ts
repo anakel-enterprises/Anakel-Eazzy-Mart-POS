@@ -3,10 +3,10 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export const cashRegisterRouter = Router();
-cashRegisterRouter.use(requireAuth, requireRole("ADMIN", "MANAGER", "CASHIER"));
+cashRegisterRouter.use(requireAuth, requirePermission("MAKE_SALES"));
 
 cashRegisterRouter.get(
   "/current",

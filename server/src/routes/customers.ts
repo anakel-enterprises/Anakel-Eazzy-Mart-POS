@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export const customersRouter = Router();
 customersRouter.use(requireAuth);
@@ -59,7 +59,7 @@ const customerSchema = z.object({
 
 customersRouter.post(
   "/",
-  requireRole("ADMIN", "MANAGER", "CASHIER"),
+  requirePermission("MANAGE_CUSTOMERS"),
   asyncHandler(async (req, res) => {
     const data = customerSchema.parse(req.body);
     const customer = await prisma.customer.create({
@@ -71,7 +71,7 @@ customersRouter.post(
 
 customersRouter.put(
   "/:id",
-  requireRole("ADMIN", "MANAGER", "CASHIER"),
+  requirePermission("MANAGE_CUSTOMERS"),
   asyncHandler(async (req, res) => {
     const data = customerSchema.partial().parse(req.body);
     const existing = await prisma.customer.findFirst({
@@ -93,7 +93,7 @@ const paymentSchema = z.object({
 
 customersRouter.post(
   "/:id/payments",
-  requireRole("ADMIN", "MANAGER", "ACCOUNTANT", "CASHIER"),
+  requirePermission("MANAGE_CUSTOMERS"),
   asyncHandler(async (req, res) => {
     const data = paymentSchema.parse(req.body);
     const customer = await prisma.customer.findFirst({

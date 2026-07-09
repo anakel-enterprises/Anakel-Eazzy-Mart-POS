@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { refreshProductCache, refreshTaxRate } from "../lib/sync";
+import type { PermissionMap } from "../lib/permissions";
 
 export interface AuthUser {
   id: string;
@@ -8,6 +9,7 @@ export interface AuthUser {
   email: string;
   role: "ADMIN" | "MANAGER" | "CASHIER" | "STOREKEEPER" | "ACCOUNTANT";
   storeId: string;
+  permissions: PermissionMap;
 }
 
 interface AuthContextValue {
@@ -29,6 +31,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const stored = localStorage.getItem("auth_user");
     if (stored) setUser(JSON.parse(stored));
     setLoading(false);
+
+    // Refresh role/permissions from the server on load in case an admin
+    // changed them since this device last logged in — best-effort, since
+    // this device may currently be offline for a shift.
+    if (stored) {
+      void api
+        .get<AuthUser>("/api/auth/me")
+        .then((fresh) => {
+          localStorage.setItem("auth_user", JSON.stringify(fresh));
+          setUser(fresh);
+        })
+        .catch(() => {
+          // Offline or token invalid — keep the cached user; requireAuth
+          // still re-verifies server-side on the next successful request.
+        });
+    }
   }, []);
 
   useEffect(() => {

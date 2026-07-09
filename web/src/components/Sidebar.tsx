@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useSidebar } from "../context/SidebarContext";
+import type { PermissionKey } from "../lib/permissions";
 
 type Role = "ADMIN" | "MANAGER" | "CASHIER" | "STOREKEEPER" | "ACCOUNTANT";
 
@@ -8,21 +9,25 @@ interface NavItem {
   to: string;
   label: string;
   letter: string;
-  roles?: Role[];
+  // Gated by a specific permission (ADMIN always bypasses), or by
+  // adminOnly for the couple of screens that stay hard-locked to ADMIN
+  // regardless of any permission toggle (employee & store management).
+  permission?: PermissionKey;
+  adminOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", letter: "D" },
-  { to: "/checkout", label: "Checkout", letter: "C", roles: ["ADMIN", "MANAGER", "CASHIER"] },
-  { to: "/inventory", label: "Inventory", letter: "I", roles: ["ADMIN", "MANAGER", "STOREKEEPER"] },
-  { to: "/register", label: "Cash Register", letter: "R", roles: ["ADMIN", "MANAGER", "CASHIER"] },
-  { to: "/suppliers", label: "Suppliers", letter: "SU", roles: ["ADMIN", "MANAGER", "STOREKEEPER", "ACCOUNTANT"] },
-  { to: "/credit-sales", label: "Credit Sales", letter: "CR", roles: ["ADMIN", "MANAGER", "ACCOUNTANT", "CASHIER"] },
-  { to: "/expenses", label: "Expenses & Income", letter: "E", roles: ["ADMIN", "MANAGER", "ACCOUNTANT"] },
-  { to: "/promotions", label: "Promotions", letter: "PR", roles: ["ADMIN", "MANAGER"] },
-  { to: "/reports", label: "Reports", letter: "RP", roles: ["ADMIN", "MANAGER", "ACCOUNTANT"] },
-  { to: "/employees", label: "Employees", letter: "U", roles: ["ADMIN"] },
-  { to: "/settings", label: "Settings", letter: "S", roles: ["ADMIN"] },
+  { to: "/checkout", label: "Checkout", letter: "C", permission: "MAKE_SALES" },
+  { to: "/inventory", label: "Inventory", letter: "I", permission: "MANAGE_PRODUCTS" },
+  { to: "/register", label: "Cash Register", letter: "R", permission: "MAKE_SALES" },
+  { to: "/suppliers", label: "Suppliers", letter: "SU", permission: "MANAGE_SUPPLIERS" },
+  { to: "/credit-sales", label: "Credit Sales", letter: "CR", permission: "MANAGE_CUSTOMERS" },
+  { to: "/expenses", label: "Expenses & Income", letter: "E", permission: "MANAGE_EXPENSES" },
+  { to: "/promotions", label: "Promotions", letter: "PR", permission: "MANAGE_PROMOTIONS" },
+  { to: "/reports", label: "Reports", letter: "RP", permission: "VIEW_REPORTS" },
+  { to: "/employees", label: "Employees", letter: "U", adminOnly: true },
+  { to: "/settings", label: "Settings", letter: "S", adminOnly: true },
 ];
 
 const ROLE_LABELS: Record<Role, string> = {
@@ -36,7 +41,12 @@ const ROLE_LABELS: Record<Role, string> = {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const { isOpen, close } = useSidebar();
-  const items = NAV_ITEMS.filter((item) => !item.roles || item.roles.includes(user?.role as Role));
+  const isAdmin = user?.role === "ADMIN";
+  const items = NAV_ITEMS.filter((item) => {
+    if (item.adminOnly) return isAdmin;
+    if (item.permission) return isAdmin || !!user?.permissions?.[item.permission];
+    return true;
+  });
 
   return (
     <>

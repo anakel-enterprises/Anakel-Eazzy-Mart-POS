@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export const promotionsRouter = Router();
 promotionsRouter.use(requireAuth);
@@ -30,7 +30,7 @@ const promotionSchema = z.object({
 
 promotionsRouter.post(
   "/",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_PROMOTIONS"),
   asyncHandler(async (req, res) => {
     const data = promotionSchema.parse(req.body);
     const promotion = await prisma.promotion.create({
@@ -47,7 +47,7 @@ promotionsRouter.post(
 
 promotionsRouter.put(
   "/:id",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_PROMOTIONS"),
   asyncHandler(async (req, res) => {
     const data = promotionSchema.partial().parse(req.body);
     const existing = await prisma.promotion.findFirst({
@@ -71,7 +71,7 @@ promotionsRouter.put(
 
 promotionsRouter.delete(
   "/:id",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_PROMOTIONS"),
   asyncHandler(async (req, res) => {
     const existing = await prisma.promotion.findFirst({
       where: { id: req.params.id, storeId: req.auth!.storeId },
@@ -109,7 +109,7 @@ const couponSchema = z.object({
 
 couponsRouter.post(
   "/",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_PROMOTIONS"),
   asyncHandler(async (req, res) => {
     const data = couponSchema.parse(req.body);
     const coupon = await prisma.coupon.create({
@@ -125,7 +125,7 @@ couponsRouter.post(
 
 couponsRouter.delete(
   "/:id",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_PROMOTIONS"),
   asyncHandler(async (req, res) => {
     const existing = await prisma.coupon.findFirst({
       where: { id: req.params.id, storeId: req.auth!.storeId },

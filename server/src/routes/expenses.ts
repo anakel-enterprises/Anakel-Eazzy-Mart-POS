@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export const expensesRouter = Router();
 expensesRouter.use(requireAuth);
@@ -22,7 +22,7 @@ const categorySchema = z.object({ name: z.string().min(1) });
 
 expensesRouter.post(
   "/categories",
-  requireRole("ADMIN", "MANAGER", "ACCOUNTANT"),
+  requirePermission("MANAGE_EXPENSES"),
   asyncHandler(async (req, res) => {
     const { name } = categorySchema.parse(req.body);
     const category = await prisma.expenseCategory.create({ data: { name, storeId: req.auth!.storeId } });
@@ -80,7 +80,7 @@ const decisionSchema = z.object({ status: z.enum(["APPROVED", "REJECTED"]) });
 
 expensesRouter.put(
   "/:id/decision",
-  requireRole("ADMIN", "MANAGER", "ACCOUNTANT"),
+  requirePermission("MANAGE_EXPENSES"),
   asyncHandler(async (req, res) => {
     const { status } = decisionSchema.parse(req.body);
     const existing = await prisma.expense.findFirst({
@@ -121,7 +121,7 @@ const incomeSchema = z.object({
 
 incomeRouter.post(
   "/",
-  requireRole("ADMIN", "MANAGER", "ACCOUNTANT"),
+  requirePermission("MANAGE_EXPENSES"),
   asyncHandler(async (req, res) => {
     const data = incomeSchema.parse(req.body);
     const income = await prisma.income.create({

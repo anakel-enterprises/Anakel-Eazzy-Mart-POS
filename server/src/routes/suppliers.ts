@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export const suppliersRouter = Router();
 suppliersRouter.use(requireAuth);
@@ -28,7 +28,7 @@ const supplierSchema = z.object({
 
 suppliersRouter.post(
   "/",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_SUPPLIERS"),
   asyncHandler(async (req, res) => {
     const data = supplierSchema.parse(req.body);
     const supplier = await prisma.supplier.create({
@@ -40,7 +40,7 @@ suppliersRouter.post(
 
 suppliersRouter.put(
   "/:id",
-  requireRole("ADMIN", "MANAGER"),
+  requirePermission("MANAGE_SUPPLIERS"),
   asyncHandler(async (req, res) => {
     const data = supplierSchema.partial().parse(req.body);
     const existing = await prisma.supplier.findFirst({
@@ -64,7 +64,7 @@ const transactionSchema = z.object({
 // A PURCHASE increases what the store owes the supplier; a PAYMENT reduces it.
 suppliersRouter.post(
   "/:id/transactions",
-  requireRole("ADMIN", "MANAGER", "STOREKEEPER", "ACCOUNTANT"),
+  requirePermission("MANAGE_SUPPLIERS"),
   asyncHandler(async (req, res) => {
     const data = transactionSchema.parse(req.body);
     const supplier = await prisma.supplier.findFirst({

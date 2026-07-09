@@ -2,12 +2,17 @@ import type { NextFunction, Request, Response } from "express";
 import { verifyToken, type AuthTokenPayload } from "../lib/auth.js";
 import { prisma } from "../lib/prisma.js";
 import type { Role } from "@prisma/client";
+import { resolvePermissions, type PermissionKey } from "../lib/permissions.js";
+
+interface RequestAuth extends AuthTokenPayload {
+  permissions: ReturnType<typeof resolvePermissions>;
+}
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
-      auth?: AuthTokenPayload;
+      auth?: RequestAuth;
     }
   }
 }
@@ -27,13 +32,18 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const payload = verifyToken(token);
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
-      select: { active: true, role: true, storeId: true },
+      select: { active: true, role: true, storeId: true, permissions: true },
     });
     if (!user || !user.active) {
       res.status(401).json({ error: "Account is disabled" });
       return;
     }
-    req.auth = { userId: payload.userId, storeId: user.storeId, role: user.role };
+    req.auth = {
+      userId: payload.userId,
+      storeId: user.storeId,
+      role: user.role,
+      permissions: resolvePermissions(user.role, user.permissions),
+    };
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });
@@ -43,6 +53,18 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.auth || !roles.includes(req.auth.role)) {
+      res.status(403).json({ error: "Insufficient permissions" });
+      return;
+    }
+    next();
+  };
+}
+
+// ADMIN always passes, regardless of their own permissions row, so an admin
+// can never lock themselves out by mis-editing overrides.
+export function requirePermission(key: PermissionKey) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.auth || (req.auth.role !== "ADMIN" && !req.auth.permissions[key])) {
       res.status(403).json({ error: "Insufficient permissions" });
       return;
     }
