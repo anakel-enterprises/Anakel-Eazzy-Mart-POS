@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 import { BarcodeLabel } from "../components/BarcodeLabel";
+import { ProductDetailModal } from "../components/ProductDetailModal";
 
 interface Product {
   id: string;
@@ -13,6 +14,7 @@ interface Product {
   cost: string | number | null;
   stockQty: number;
   lowStockThreshold: number;
+  categoryId: string | null;
   category: { name: string } | null;
 }
 
@@ -44,8 +46,7 @@ export function Inventory() {
   const [error, setError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showLabels, setShowLabels] = useState(false);
-  const [adjustQty, setAdjustQty] = useState<Record<string, string>>({});
-  const [costSaving, setCostSaving] = useState<string | null>(null);
+  const [detailProduct, setDetailProduct] = useState<Product | null>(null);
 
   function toggleSelected(id: string) {
     setSelectedIds((prev) => {
@@ -87,29 +88,6 @@ export function Inventory() {
       await load();
     } catch {
       setError("Couldn't save product — check the fields and try again.");
-    }
-  }
-
-  async function adjustStock(productId: string, sign: 1 | -1) {
-    const magnitude = Math.abs(Math.trunc(Number(adjustQty[productId]))) || 1;
-    await api.post(`/api/products/${productId}/adjustments`, {
-      quantityDelta: sign * magnitude,
-      reason: "MANUAL_CORRECTION",
-    });
-    await load();
-  }
-
-  async function saveCost(productId: string, value: string) {
-    const cost = value.trim() === "" ? undefined : Number(value);
-    if (cost !== undefined && (Number.isNaN(cost) || cost < 0)) return;
-    setCostSaving(productId);
-    try {
-      // The PUT response is the raw product row (no `category` relation), so
-      // only merge the field we changed rather than replacing the row.
-      const updated = await api.put<Product>(`/api/products/${productId}`, { cost });
-      setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, cost: updated.cost } : p)));
-    } finally {
-      setCostSaving(null);
     }
   }
 
@@ -157,8 +135,8 @@ export function Inventory() {
 
         <Card>
           <div className="overflow-x-auto">
-            <div className="min-w-[900px]">
-              <div className="grid grid-cols-[0.3fr_1.8fr_1fr_1fr_1fr_1fr_1fr_1.6fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+            <div className="min-w-[720px]">
+              <div className="grid grid-cols-[0.3fr_2fr_1fr_1fr_1fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
                 <span></span>
                 <span>PRODUCT</span>
                 <span>SKU</span>
@@ -166,46 +144,32 @@ export function Inventory() {
                 <span>PRICE</span>
                 <span>COST</span>
                 <span>STOCK</span>
-                <span>ADJUST</span>
               </div>
               {products.map((p) => (
-                <div key={p.id} className="grid grid-cols-[0.3fr_1.8fr_1fr_1fr_1fr_1fr_1fr_1.6fr] items-center border-b border-brand-border/60 py-2.5 text-sm">
-                  <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelected(p.id)} className="h-4 w-4" />
+                <div
+                  key={p.id}
+                  onClick={() => setDetailProduct(p)}
+                  className="grid cursor-pointer grid-cols-[0.3fr_2fr_1fr_1fr_1fr_1fr_1fr] items-center border-b border-brand-border/60 py-2.5 text-sm hover:bg-brand-bg"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(p.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => toggleSelected(p.id)}
+                    className="h-4 w-4"
+                  />
                   <span className="font-semibold text-brand-ink">{p.name}</span>
                   <span className="text-brand-inkMuted">{p.sku}</span>
                   <span className="text-brand-inkMuted">{p.category?.name ?? "—"}</span>
                   <span>{currencyFmt.format(Number(p.price))}</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="—"
-                    defaultValue={p.cost != null ? Number(p.cost) : ""}
-                    disabled={costSaving === p.id}
-                    onBlur={(e) => void saveCost(p.id, e.target.value)}
-                    className="w-24 rounded-md border border-brand-border px-2 py-1 text-sm disabled:opacity-50"
-                  />
+                  <span className="text-brand-inkMuted">{p.cost != null ? currencyFmt.format(Number(p.cost)) : "—"}</span>
                   <span className={p.stockQty <= p.lowStockThreshold ? "font-bold text-brand-warn" : ""}>{p.stockQty}</span>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      min="1"
-                      placeholder="1"
-                      value={adjustQty[p.id] ?? ""}
-                      onChange={(e) => setAdjustQty((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                      className="w-14 rounded-md border border-brand-border px-1.5 py-1 text-sm"
-                    />
-                    <button onClick={() => void adjustStock(p.id, -1)} className="h-7 w-7 shrink-0 rounded-md bg-brand-bg text-brand-ink">
-                      −
-                    </button>
-                    <button onClick={() => void adjustStock(p.id, 1)} className="h-7 w-7 shrink-0 rounded-md bg-brand-bg text-brand-ink">
-                      +
-                    </button>
-                  </div>
                 </div>
               ))}
+              {products.length === 0 && <div className="py-6 text-sm text-brand-inkMuted">No products yet.</div>}
             </div>
           </div>
+          <div className="pt-3 text-xs text-brand-inkMuted">Tap a product to edit its details, price, or stock.</div>
         </Card>
 
         {showLabels && (
@@ -224,6 +188,15 @@ export function Inventory() {
           </Card>
         )}
       </div>
+
+      {detailProduct && (
+        <ProductDetailModal
+          product={detailProduct}
+          categories={categories}
+          onClose={() => setDetailProduct(null)}
+          onSaved={() => void load()}
+        />
+      )}
     </>
   );
 }
