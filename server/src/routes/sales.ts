@@ -62,7 +62,6 @@ salesRouter.post(
       return;
     }
 
-    const store = await prisma.store.findUniqueOrThrow({ where: { id: req.auth!.storeId } });
     const openSession = await prisma.cashRegisterSession.findFirst({
       where: { storeId: req.auth!.storeId, cashierId: req.auth!.userId, status: "OPEN" },
     });
@@ -160,7 +159,9 @@ salesRouter.post(
 
     const discountTotal = Prisma.Decimal.min(promotionDiscount.add(couponDiscount), subtotal);
     const taxableAmount = subtotal.sub(discountTotal);
-    const taxTotal = data.status === "COMPLETED" ? taxableAmount.mul(store.taxRate).div(100) : new Prisma.Decimal(0);
+    // Tax charging was removed — it was overcharging customers. Sales are
+    // untaxed; `taxTotal` stays zero for every new sale.
+    const taxTotal = new Prisma.Decimal(0);
     const total = taxableAmount.add(taxTotal);
     // Split amounts only need to *cover* the total, not match it exactly —
     // the client can't predict the exact tax/discount-inclusive total in

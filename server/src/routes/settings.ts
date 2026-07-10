@@ -20,7 +20,6 @@ const updateSchema = z.object({
   address: z.string().optional(),
   phone: z.string().optional(),
   currency: z.string().optional(),
-  taxRate: z.number().min(0).max(100).optional(),
 });
 
 settingsRouter.put(

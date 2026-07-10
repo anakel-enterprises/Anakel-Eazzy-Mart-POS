@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
-import { refreshProductCache, refreshTaxRate } from "../lib/sync";
+import { refreshProductCache } from "../lib/sync";
 import type { PermissionMap } from "../lib/permissions";
 
 export interface AuthUser {
@@ -71,7 +71,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(result.user);
     setSessionExpired(false);
     void refreshProductCache();
-    void refreshTaxRate();
   }
 
   function logout() {

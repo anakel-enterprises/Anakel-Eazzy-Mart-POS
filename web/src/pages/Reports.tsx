@@ -65,6 +65,30 @@ interface ProfitLossReport {
   netProfit: number;
 }
 
+interface TimeseriesPoint {
+  label: string;
+  sales: number;
+  expenses: number;
+  profit: number;
+}
+
+interface TimeseriesReport {
+  granularity: "day" | "month";
+  series: TimeseriesPoint[];
+}
+
+const CHART_METRICS = ["Sales", "Expenses", "Profit"] as const;
+type ChartMetric = (typeof CHART_METRICS)[number];
+
+function formatBucketLabel(label: string, granularity: "day" | "month"): string {
+  if (granularity === "month") {
+    const [year, month] = label.split("-").map(Number);
+    return new Date(year, month - 1, 1).toLocaleDateString("en-KE", { month: "short", year: "2-digit" });
+  }
+  const [year, month, day] = label.split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString("en-KE", { month: "short", day: "numeric" });
+}
+
 const TABS = ["P&L", "Sales", "Profit", "Inventory", "Finance", "Customers", "Suppliers", "Employees"] as const;
 type Tab = (typeof TABS)[number];
 
@@ -100,6 +124,8 @@ export function Reports() {
   const [customers, setCustomers] = useState<CustomersReport | null>(null);
   const [suppliers, setSuppliers] = useState<SuppliersReport | null>(null);
   const [employees, setEmployees] = useState<EmployeeRow[] | null>(null);
+  const [timeseries, setTimeseries] = useState<TimeseriesReport | null>(null);
+  const [chartMetric, setChartMetric] = useState<ChartMetric>("Sales");
 
   function rangeQuery() {
     const { from, to } = periodRange(period);
@@ -111,7 +137,9 @@ export function Reports() {
   }
 
   useEffect(() => {
-    if (tab === "P&L") void api.get<ProfitLossReport>(`/api/reports/profit-loss${rangeQuery()}`).then(setProfitLoss);
+    if (tab !== "P&L") return;
+    void api.get<ProfitLossReport>(`/api/reports/profit-loss${rangeQuery()}`).then(setProfitLoss);
+    void api.get<TimeseriesReport>(`/api/reports/timeseries${rangeQuery()}`).then(setTimeseries);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, period]);
 
@@ -191,6 +219,24 @@ export function Reports() {
             </div>
 
             <Card>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <span className="font-display text-[15px] font-bold text-brand-ink">{chartMetric} trend — {period}</span>
+                <div className="flex flex-wrap gap-2">
+                  {CHART_METRICS.map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setChartMetric(m)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${chartMetric === m ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"}`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <ReportChart metric={chartMetric} data={timeseries} />
+            </Card>
+
+            <Card>
               <div className="mb-1 font-display text-[15px] font-bold text-brand-ink">Profit & Loss — {period}</div>
               <div className="mb-4 text-xs text-brand-inkMuted">{profitLoss?.transactionCount ?? 0} transactions in this period</div>
               <div className="flex flex-col divide-y divide-brand-border/60">
@@ -242,23 +288,41 @@ export function Reports() {
             </div>
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Sales by payment method</div>
-              {sales?.byPaymentMethod.map((row) => (
-                <div key={row.paymentMethod} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
-                  <span className="font-semibold text-brand-ink">{row.paymentMethod}</span>
-                  <span className="text-brand-inkMuted">{row._count} sales</span>
-                  <span className="font-semibold">{currencyFmt.format(row._sum.total ?? 0)}</span>
+              <div className="overflow-x-auto">
+                <div className="min-w-[420px]">
+                  <div className="grid grid-cols-[1.4fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                    <span>METHOD</span>
+                    <span>SALES</span>
+                    <span>AMOUNT</span>
+                  </div>
+                  {sales?.byPaymentMethod.map((row) => (
+                    <div key={row.paymentMethod} className="grid grid-cols-[1.4fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
+                      <span className="font-semibold text-brand-ink">{row.paymentMethod}</span>
+                      <span className="text-brand-inkMuted">{row._count} sales</span>
+                      <span className="font-semibold">{currencyFmt.format(row._sum.total ?? 0)}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </Card>
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Top products</div>
-              {sales?.topProducts.map((p) => (
-                <div key={p.productId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
-                  <span className="font-semibold text-brand-ink">{p.name}</span>
-                  <span className="text-brand-inkMuted">{p._sum.quantity ?? 0} sold</span>
-                  <span className="font-semibold">{currencyFmt.format(p._sum.lineTotal ?? 0)}</span>
+              <div className="overflow-x-auto">
+                <div className="min-w-[420px]">
+                  <div className="grid grid-cols-[2fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                    <span>PRODUCT</span>
+                    <span>QTY SOLD</span>
+                    <span>REVENUE</span>
+                  </div>
+                  {sales?.topProducts.map((p) => (
+                    <div key={p.productId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
+                      <span className="font-semibold text-brand-ink">{p.name}</span>
+                      <span className="text-brand-inkMuted">{p._sum.quantity ?? 0} sold</span>
+                      <span className="font-semibold">{currencyFmt.format(p._sum.lineTotal ?? 0)}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </Card>
           </>
         )}
@@ -297,15 +361,24 @@ export function Reports() {
             </div>
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Profit by product</div>
-              {profit?.byProduct
-                .sort((a, b) => b.profit - a.profit)
-                .map((p) => (
-                  <div key={p.productId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
-                    <span className="font-semibold text-brand-ink">{p.name}</span>
-                    <span className="text-brand-inkMuted">rev {currencyFmt.format(p.revenue)}</span>
-                    <span className="font-semibold text-brand-accentText">{currencyFmt.format(p.profit)}</span>
+              <div className="overflow-x-auto">
+                <div className="min-w-[420px]">
+                  <div className="grid grid-cols-[2fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                    <span>PRODUCT</span>
+                    <span>REVENUE</span>
+                    <span>PROFIT</span>
                   </div>
-                ))}
+                  {profit?.byProduct
+                    .sort((a, b) => b.profit - a.profit)
+                    .map((p) => (
+                      <div key={p.productId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
+                        <span className="font-semibold text-brand-ink">{p.name}</span>
+                        <span className="text-brand-inkMuted">{currencyFmt.format(p.revenue)}</span>
+                        <span className="font-semibold text-brand-accentText">{currencyFmt.format(p.profit)}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
             </Card>
           </>
         )}
@@ -348,13 +421,22 @@ export function Reports() {
             </div>
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Stock valuation</div>
-              {inventory?.products.map((p) => (
-                <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
-                  <span className="font-semibold text-brand-ink">{p.name}</span>
-                  <span className="text-brand-inkMuted">{p.stockQty} units</span>
-                  <span className="font-semibold">{currencyFmt.format(p.stockQty * Number(p.price))}</span>
+              <div className="overflow-x-auto">
+                <div className="min-w-[420px]">
+                  <div className="grid grid-cols-[2fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                    <span>PRODUCT</span>
+                    <span>STOCK</span>
+                    <span>VALUE</span>
+                  </div>
+                  {inventory?.products.map((p) => (
+                    <div key={p.id} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
+                      <span className="font-semibold text-brand-ink">{p.name}</span>
+                      <span className="text-brand-inkMuted">{p.stockQty} units</span>
+                      <span className="font-semibold">{currencyFmt.format(p.stockQty * Number(p.price))}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </Card>
           </>
         )}
@@ -438,13 +520,24 @@ export function Reports() {
             </div>
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Top customers</div>
-              {customers?.topCustomers.map((c) => (
-                <div key={c.customerId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
-                  <span className="font-semibold text-brand-ink">{c.name}</span>
-                  <span className="text-brand-inkMuted">{c.orderCount} orders</span>
-                  <span className="font-semibold">{currencyFmt.format(c.totalSpent)}</span>
+              {customers && customers.topCustomers.length > 0 && (
+                <div className="overflow-x-auto">
+                  <div className="min-w-[420px]">
+                    <div className="grid grid-cols-[2fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                      <span>CUSTOMER</span>
+                      <span>ORDERS</span>
+                      <span>TOTAL SPENT</span>
+                    </div>
+                    {customers.topCustomers.map((c) => (
+                      <div key={c.customerId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
+                        <span className="font-semibold text-brand-ink">{c.name}</span>
+                        <span className="text-brand-inkMuted">{c.orderCount} orders</span>
+                        <span className="font-semibold">{currencyFmt.format(c.totalSpent)}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              )}
               {customers && customers.topCustomers.length === 0 && <div className="text-sm text-brand-inkMuted">No customer sales yet.</div>}
             </Card>
           </>
@@ -506,13 +599,24 @@ export function Reports() {
             </div>
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Sales by employee</div>
-              {employees?.map((e) => (
-                <div key={e.cashierId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-brand-border/60 py-2 text-sm">
-                  <span className="font-semibold text-brand-ink">{e.name}</span>
-                  <span className="text-brand-inkMuted">{e.transactionCount} sales</span>
-                  <span className="font-semibold">{currencyFmt.format(e.totalSales)}</span>
+              {employees && employees.length > 0 && (
+                <div className="overflow-x-auto">
+                  <div className="min-w-[420px]">
+                    <div className="grid grid-cols-[2fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                      <span>EMPLOYEE</span>
+                      <span>SALES</span>
+                      <span>TOTAL SALES</span>
+                    </div>
+                    {employees.map((e) => (
+                      <div key={e.cashierId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
+                        <span className="font-semibold text-brand-ink">{e.name}</span>
+                        <span className="text-brand-inkMuted">{e.transactionCount} sales</span>
+                        <span className="font-semibold">{currencyFmt.format(e.totalSales)}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              )}
               {employees && employees.length === 0 && <div className="text-sm text-brand-inkMuted">No sales recorded yet.</div>}
             </Card>
           </>
@@ -529,6 +633,52 @@ function Row({ label, value, bold, accent, indent }: { label: string; value?: nu
       <span className={`font-semibold ${accent ? "text-brand-accentText" : bold ? "text-brand-ink" : ""}`}>
         {value === undefined ? "—" : currencyFmt.format(value)}
       </span>
+    </div>
+  );
+}
+
+const CHART_BAR_HEIGHT = 140;
+
+function ReportChart({ metric, data }: { metric: ChartMetric; data: TimeseriesReport | null }) {
+  const key = metric.toLowerCase() as "sales" | "expenses" | "profit";
+  const series = data?.series ?? [];
+  const total = series.reduce((sum, pt) => sum + pt[key], 0);
+  const maxAbs = Math.max(...series.map((pt) => Math.abs(pt[key])), 1);
+  const hasNegative = series.some((pt) => pt[key] < 0);
+
+  return (
+    <div>
+      <div className="mb-3 text-xl font-bold text-brand-ink">
+        {currencyFmt.format(total)} <span className="text-xs font-normal text-brand-inkMuted">total {metric.toLowerCase()}</span>
+      </div>
+      {series.length === 0 ? (
+        <div className="py-10 text-center text-sm text-brand-inkMuted">No data for this period.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <div className={`flex items-stretch gap-2 px-1 ${series.length > 10 ? "min-w-[720px]" : ""}`} style={{ height: CHART_BAR_HEIGHT + 24 }}>
+            {series.map((pt) => {
+              const value = pt[key];
+              const barHeight = Math.max((Math.abs(value) / maxAbs) * (CHART_BAR_HEIGHT / (hasNegative ? 2 : 1)), value === 0 ? 0 : 3);
+              const barColor = value < 0 ? "bg-brand-warn" : "bg-gradient-to-b from-brand-accent to-brand-accentDeep";
+              return (
+                <div key={pt.label} className="flex min-w-[28px] flex-1 flex-col items-center">
+                  <div className="flex w-full flex-1 flex-col justify-end">
+                    {value >= 0 && <div className={`mx-auto w-full max-w-[26px] rounded-t-md ${barColor}`} style={{ height: barHeight }} />}
+                  </div>
+                  {hasNegative && (
+                    <div className="flex w-full flex-1 flex-col justify-start">
+                      {value < 0 && <div className={`mx-auto w-full max-w-[26px] rounded-b-md ${barColor}`} style={{ height: barHeight }} />}
+                    </div>
+                  )}
+                  <span className="mt-1.5 whitespace-nowrap text-[10px] text-brand-inkMuted">
+                    {formatBucketLabel(pt.label, data!.granularity)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

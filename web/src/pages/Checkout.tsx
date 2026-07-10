@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb, newClientId, type CachedProduct, type SplitPaymentEntry } from "../db/localDb";
-import { getCachedTaxRate, queueSale, refreshProductCache, refreshTaxRate } from "../lib/sync";
+import { queueSale, refreshProductCache } from "../lib/sync";
 import { api, isApiReachable } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
@@ -48,7 +48,6 @@ export function Checkout() {
     void isApiReachable().then((reachable) => {
       if (reachable) {
         void refreshProductCache();
-        void refreshTaxRate();
       }
     });
   }, []);
@@ -79,15 +78,12 @@ export function Checkout() {
   const heldSales = useLiveQuery(() => localDb.heldSales.orderBy("createdAt").reverse().toArray(), [], []);
 
   const subtotal = useMemo(() => cart.reduce((sum, l) => sum + l.product.price * l.quantity, 0), [cart]);
-  const taxRate = getCachedTaxRate();
   // Estimated, not authoritative — the server is the source of truth and
   // additionally applies any active promotions/coupon, which this doesn't
-  // know about. Close enough to give the cashier a real number to work
-  // from instead of a bare pre-tax subtotal, and split payments only need
-  // to *cover* the server-computed total (see sales.ts), so an estimate
-  // that's a little high from ignoring discounts is safe either way.
-  const estimatedTax = Math.round(subtotal * (taxRate / 100) * 100) / 100;
-  const total = Math.round((subtotal + estimatedTax) * 100) / 100;
+  // know about. Sales are untaxed, so this is just the discounted subtotal;
+  // split payments only need to *cover* the server-computed total (see
+  // sales.ts), so an estimate that ignores discounts is safe either way.
+  const total = Math.round(subtotal * 100) / 100;
   const tendered = Number(amountTendered) || 0;
   const changeDue = paymentMethod === "CASH" ? Math.max(tendered - total, 0) : 0;
   const splitAllocated = splitRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
@@ -403,10 +399,6 @@ export function Checkout() {
             <div className="flex justify-between text-sm text-brand-inkMuted">
               <span>Subtotal</span>
               <span>{currencyFmt.format(subtotal)}</span>
-            </div>
-            <div className="flex justify-between text-sm text-brand-inkMuted">
-              <span>Tax ({taxRate}%, estimated)</span>
-              <span>{currencyFmt.format(estimatedTax)}</span>
             </div>
             <div className="flex justify-between font-display text-lg font-bold text-brand-ink">
               <span>Total (estimated)</span>

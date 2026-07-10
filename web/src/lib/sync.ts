@@ -35,23 +35,6 @@ export async function refreshProductCache(): Promise<void> {
   });
 }
 
-const TAX_RATE_KEY = "cached_tax_rate";
-
-// Cached in localStorage (not Dexie — it's one small number) so the
-// checkout total estimate is still accurate offline. Tax is computed
-// authoritatively server-side on sync either way; this is only used to show
-// the cashier a close-enough total (and a sane split-payment starting
-// point) instead of a bare pre-tax subtotal.
-export async function refreshTaxRate(): Promise<void> {
-  const store = await api.get<{ taxRate: string | number }>("/api/settings");
-  localStorage.setItem(TAX_RATE_KEY, String(store.taxRate));
-}
-
-export function getCachedTaxRate(): number {
-  const raw = localStorage.getItem(TAX_RATE_KEY);
-  return raw ? Number(raw) : 0;
-}
-
 export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncError">): Promise<void> {
   await localDb.pendingSales.put({ ...sale, syncStatus: "pending" });
   void flushPendingSales();
@@ -125,7 +108,6 @@ export function startBackgroundSync(): () => void {
       void isApiReachable().then((reachable) => {
         if (reachable) {
           void refreshProductCache();
-          void refreshTaxRate();
         }
       });
     }

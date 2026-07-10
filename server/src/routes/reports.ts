@@ -225,6 +225,78 @@ reportsRouter.get(
   })
 );
 
+// Buckets sales/expenses/profit into a chartable series across the given
+// range — daily buckets for a span of ~2 months or less, monthly buckets
+// for anything longer (e.g. "All Time"), so the chart stays readable
+// instead of plotting hundreds of daily points.
+reportsRouter.get(
+  "/timeseries",
+  asyncHandler(async (req, res) => {
+    const storeId = req.auth!.storeId;
+    const { from, to } = req.query;
+    const range = dateRangeWhere(from, to);
+
+    const rangeTo = to ? new Date(String(to)) : new Date();
+    const rangeFrom = from ? new Date(String(from)) : new Date(0);
+    const spanDays = Math.max(1, Math.ceil((rangeTo.getTime() - rangeFrom.getTime()) / (24 * 60 * 60 * 1000)));
+    const granularity: "day" | "month" = spanDays <= 62 ? "day" : "month";
+    const bucketKey = (d: Date) => (granularity === "day" ? d.toISOString().slice(0, 10) : d.toISOString().slice(0, 7));
+
+    const [sales, saleItems, expenses, income] = await Promise.all([
+      prisma.sale.findMany({
+        where: { storeId, status: "COMPLETED", ...range },
+        select: { createdAt: true, subtotal: true, discountTotal: true },
+      }),
+      prisma.saleItem.findMany({
+        where: { sale: { storeId, status: "COMPLETED", ...range } },
+        select: { quantity: true, product: { select: { cost: true } }, sale: { select: { createdAt: true } } },
+      }),
+      prisma.expense.findMany({
+        where: { storeId, status: "APPROVED", ...(from || to ? { date: range.createdAt } : {}) },
+        select: { date: true, amount: true },
+      }),
+      prisma.income.findMany({
+        where: { storeId, ...(from || to ? { date: range.createdAt } : {}) },
+        select: { date: true, amount: true },
+      }),
+    ]);
+
+    const buckets = new Map<string, { sales: number; cogs: number; expenses: number; income: number }>();
+    function bucket(key: string) {
+      let b = buckets.get(key);
+      if (!b) {
+        b = { sales: 0, cogs: 0, expenses: 0, income: 0 };
+        buckets.set(key, b);
+      }
+      return b;
+    }
+
+    for (const s of sales) {
+      bucket(bucketKey(s.createdAt)).sales += Number(s.subtotal) - Number(s.discountTotal);
+    }
+    for (const item of saleItems) {
+      bucket(bucketKey(item.sale.createdAt)).cogs += Number(item.product.cost ?? 0) * item.quantity;
+    }
+    for (const e of expenses) {
+      bucket(bucketKey(e.date)).expenses += Number(e.amount);
+    }
+    for (const i of income) {
+      bucket(bucketKey(i.date)).income += Number(i.amount);
+    }
+
+    const series = Array.from(buckets.entries())
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([label, b]) => ({
+        label,
+        sales: b.sales,
+        expenses: b.expenses,
+        profit: b.sales - b.cogs + b.income - b.expenses,
+      }));
+
+    res.json({ granularity, series });
+  })
+);
+
 reportsRouter.get(
   "/inventory",
   asyncHandler(async (req, res) => {
