@@ -5,6 +5,16 @@ import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
+const compactCurrencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", notation: "compact", maximumFractionDigits: 1 });
+
+// Fixed categorical hues (validated for lightness/chroma/CVD separation) — used
+// consistently across every chart on this page, never reassigned per-series.
+const CHART_COLORS = { sales: "#3b6fd6", expenses: "#e08a2c", profit: "#2e9e52" };
+const INK = "#181611";
+const INK_MUTED = "#65635d";
+const SURFACE = "#f9f8f5";
+const GRID = "#e9e8e4";
+const AVG_LINE = "#c9c6bd";
 
 interface SalesSummary {
   totals: { _sum: { subtotal: number | null; taxTotal: number | null; total: number | null }; _count: number };
@@ -72,13 +82,25 @@ interface TimeseriesPoint {
   profit: number;
 }
 
-interface TimeseriesReport {
-  granularity: "day" | "month";
-  series: TimeseriesPoint[];
+interface PeriodTotals {
+  revenue: number;
+  expenses: number;
+  cogs: number;
+  grossProfit: number;
+  otherIncome: number;
+  netProfit: number;
+  grossMarginPct: number;
+  netMarginPct: number;
 }
 
-const CHART_METRICS = ["Sales", "Expenses", "Profit"] as const;
-type ChartMetric = (typeof CHART_METRICS)[number];
+interface AnalyticsReport {
+  current: PeriodTotals;
+  previous: PeriodTotals | null;
+  granularity: "day" | "month";
+  trend: TimeseriesPoint[];
+  topProducts: { name: string; revenue: number }[];
+  topExpenseCategories: { category: string; amount: number }[];
+}
 
 function formatBucketLabel(label: string, granularity: "day" | "month"): string {
   if (granularity === "month") {
@@ -92,10 +114,11 @@ function formatBucketLabel(label: string, granularity: "day" | "month"): string 
 const TABS = ["P&L", "Sales", "Profit", "Inventory", "Finance", "Customers", "Suppliers", "Employees"] as const;
 type Tab = (typeof TABS)[number];
 
-const PERIODS = ["Today", "This Week", "This Month", "All Time"] as const;
+const STANDARD_PERIODS = ["Today", "This Week", "This Month", "All Time"] as const;
+const PERIODS = [...STANDARD_PERIODS, "Custom"] as const;
 type Period = (typeof PERIODS)[number];
 
-function periodRange(period: Period): { from?: Date; to?: Date } {
+function periodRange(period: Period, customFrom: string, customTo: string): { from?: Date; to?: Date } {
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   switch (period) {
@@ -110,13 +133,29 @@ function periodRange(period: Period): { from?: Date; to?: Date } {
       return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: now };
     case "All Time":
       return {};
+    case "Custom":
+      return {
+        from: customFrom ? new Date(`${customFrom}T00:00:00`) : undefined,
+        to: customTo ? new Date(`${customTo}T23:59:59.999`) : undefined,
+      };
   }
+}
+
+function periodLabel(period: Period, customFrom: string, customTo: string): string {
+  if (period !== "Custom") return period;
+  if (customFrom && customTo) return `${customFrom} to ${customTo}`;
+  if (customFrom) return `From ${customFrom}`;
+  if (customTo) return `Until ${customTo}`;
+  return "Custom range";
 }
 
 export function Reports() {
   const [tab, setTab] = useState<Tab>("P&L");
   const [period, setPeriod] = useState<Period>("Today");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const [profitLoss, setProfitLoss] = useState<ProfitLossReport | null>(null);
+  const [analytics, setAnalytics] = useState<AnalyticsReport | null>(null);
   const [sales, setSales] = useState<SalesSummary | null>(null);
   const [profit, setProfit] = useState<ProfitReport | null>(null);
   const [inventory, setInventory] = useState<InventoryReport | null>(null);
@@ -124,11 +163,9 @@ export function Reports() {
   const [customers, setCustomers] = useState<CustomersReport | null>(null);
   const [suppliers, setSuppliers] = useState<SuppliersReport | null>(null);
   const [employees, setEmployees] = useState<EmployeeRow[] | null>(null);
-  const [timeseries, setTimeseries] = useState<TimeseriesReport | null>(null);
-  const [chartMetric, setChartMetric] = useState<ChartMetric>("Sales");
 
   function rangeQuery() {
-    const { from, to } = periodRange(period);
+    const { from, to } = periodRange(period, customFrom, customTo);
     const params = new URLSearchParams();
     if (from) params.set("from", from.toISOString());
     if (to) params.set("to", to.toISOString());
@@ -139,40 +176,41 @@ export function Reports() {
   useEffect(() => {
     if (tab !== "P&L") return;
     void api.get<ProfitLossReport>(`/api/reports/profit-loss${rangeQuery()}`).then(setProfitLoss);
-    void api.get<TimeseriesReport>(`/api/reports/timeseries${rangeQuery()}`).then(setTimeseries);
+    void api.get<AnalyticsReport>(`/api/reports/analytics${rangeQuery()}`).then(setAnalytics);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, period]);
+  }, [tab, period, customFrom, customTo]);
 
   useEffect(() => {
     switch (tab) {
       case "Sales":
-        if (!sales) void api.get<SalesSummary>("/api/reports/sales-summary").then(setSales);
+        void api.get<SalesSummary>(`/api/reports/sales-summary${rangeQuery()}`).then(setSales);
         break;
       case "Profit":
-        if (!profit) void api.get<ProfitReport>("/api/reports/profit").then(setProfit);
+        void api.get<ProfitReport>(`/api/reports/profit${rangeQuery()}`).then(setProfit);
         break;
       case "Inventory":
         if (!inventory) void api.get<InventoryReport>("/api/reports/inventory").then(setInventory);
         break;
       case "Finance":
-        if (!finance) void api.get<FinanceReport>("/api/reports/finance").then(setFinance);
+        void api.get<FinanceReport>(`/api/reports/finance${rangeQuery()}`).then(setFinance);
         break;
       case "Customers":
-        if (!customers) void api.get<CustomersReport>("/api/reports/customers").then(setCustomers);
+        void api.get<CustomersReport>(`/api/reports/customers${rangeQuery()}`).then(setCustomers);
         break;
       case "Suppliers":
         if (!suppliers) void api.get<SuppliersReport>("/api/reports/suppliers").then(setSuppliers);
         break;
       case "Employees":
-        if (!employees) void api.get<EmployeeRow[]>("/api/reports/employee-performance").then(setEmployees);
+        void api.get<EmployeeRow[]>(`/api/reports/employee-performance${rangeQuery()}`).then(setEmployees);
         break;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [tab, period, customFrom, customTo]);
 
   function downloadPnl() {
     if (!profitLoss) return;
-    downloadCsv(`profit-and-loss-${period.toLowerCase().replace(" ", "-")}.csv`, ["Line", "Amount (KSh)"], [
+    const slug = period === "Custom" && customFrom && customTo ? `${customFrom}_to_${customTo}` : period.toLowerCase().replace(/\s+/g, "-");
+    downloadCsv(`profit-and-loss-${slug}.csv`, ["Line", "Amount (KSh)"], [
       ["Net Sales", profitLoss.netSales],
       ["Cost of Goods Sold", -profitLoss.cogs],
       ["Gross Profit", profitLoss.grossProfit],
@@ -182,6 +220,8 @@ export function Reports() {
       ["Net Profit", profitLoss.netProfit],
     ]);
   }
+
+  const showDateRange = tab !== "Inventory" && tab !== "Suppliers";
 
   return (
     <>
@@ -199,45 +239,34 @@ export function Reports() {
           ))}
         </div>
 
+        {showDateRange && (
+          <DateRangeControl
+            period={period}
+            onPeriodChange={setPeriod}
+            customFrom={customFrom}
+            customTo={customTo}
+            onCustomFromChange={setCustomFrom}
+            onCustomToChange={setCustomTo}
+          />
+        )}
+        {!showDateRange && (
+          <div className="text-xs text-brand-inkMuted">Live snapshot — not scoped to a date range.</div>
+        )}
+
         {tab === "P&L" && (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap gap-2">
-                {PERIODS.map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setPeriod(p)}
-                    className={`rounded-full px-3 py-1.5 text-xs font-semibold ${period === p ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"}`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
+            <div className="flex justify-end">
               <Button variant="secondary" onClick={downloadPnl} disabled={!profitLoss}>
                 Download CSV
               </Button>
             </div>
 
-            <Card>
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <span className="font-display text-[15px] font-bold text-brand-ink">{chartMetric} trend — {period}</span>
-                <div className="flex flex-wrap gap-2">
-                  {CHART_METRICS.map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setChartMetric(m)}
-                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${chartMetric === m ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"}`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <ReportChart metric={chartMetric} data={timeseries} />
-            </Card>
+            <AnalyticsDashboard data={analytics} periodText={periodLabel(period, customFrom, customTo)} />
 
             <Card>
-              <div className="mb-1 font-display text-[15px] font-bold text-brand-ink">Profit & Loss — {period}</div>
+              <div className="mb-1 font-display text-[15px] font-bold text-brand-ink">
+                Profit & Loss — {periodLabel(period, customFrom, customTo)}
+              </div>
               <div className="mb-4 text-xs text-brand-inkMuted">{profitLoss?.transactionCount ?? 0} transactions in this period</div>
               <div className="flex flex-col divide-y divide-brand-border/60">
                 <Row label="Net Sales" value={profitLoss?.netSales} />
@@ -538,7 +567,7 @@ export function Reports() {
                   </div>
                 </div>
               )}
-              {customers && customers.topCustomers.length === 0 && <div className="text-sm text-brand-inkMuted">No customer sales yet.</div>}
+              {customers && customers.topCustomers.length === 0 && <div className="text-sm text-brand-inkMuted">No customer sales in this period.</div>}
             </Card>
           </>
         )}
@@ -617,12 +646,323 @@ export function Reports() {
                   </div>
                 </div>
               )}
-              {employees && employees.length === 0 && <div className="text-sm text-brand-inkMuted">No sales recorded yet.</div>}
+              {employees && employees.length === 0 && <div className="text-sm text-brand-inkMuted">No sales recorded in this period.</div>}
             </Card>
           </>
         )}
       </div>
     </>
+  );
+}
+
+function DateRangeControl({
+  period,
+  onPeriodChange,
+  customFrom,
+  customTo,
+  onCustomFromChange,
+  onCustomToChange,
+}: {
+  period: Period;
+  onPeriodChange: (p: Period) => void;
+  customFrom: string;
+  customTo: string;
+  onCustomFromChange: (v: string) => void;
+  onCustomToChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {STANDARD_PERIODS.map((p) => (
+        <button
+          key={p}
+          onClick={() => onPeriodChange(p)}
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${period === p ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"}`}
+        >
+          {p}
+        </button>
+      ))}
+      <div className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 ${period === "Custom" ? "bg-brand-accentDeep" : "bg-brand-bg"}`}>
+        <input
+          type="date"
+          value={customFrom}
+          onChange={(e) => {
+            onCustomFromChange(e.target.value);
+            onPeriodChange("Custom");
+          }}
+          className={`bg-transparent text-xs font-semibold outline-none ${period === "Custom" ? "text-white" : "text-brand-ink"}`}
+        />
+        <span className={`text-xs ${period === "Custom" ? "text-white/80" : "text-brand-inkMuted"}`}>to</span>
+        <input
+          type="date"
+          value={customTo}
+          onChange={(e) => {
+            onCustomToChange(e.target.value);
+            onPeriodChange("Custom");
+          }}
+          className={`bg-transparent text-xs font-semibold outline-none ${period === "Custom" ? "text-white" : "text-brand-ink"}`}
+        />
+      </div>
+    </div>
+  );
+}
+
+function pctChange(curr: number, prev: number): number | null {
+  if (prev === 0) return curr === 0 ? 0 : null;
+  return ((curr - prev) / Math.abs(prev)) * 100;
+}
+
+function AnalyticsDashboard({ data, periodText }: { data: AnalyticsReport | null; periodText: string }) {
+  const c = data?.current;
+  const p = data?.previous;
+  const revenueDelta = c && p ? pctChange(c.revenue, p.revenue) : null;
+  const expensesDelta = c && p ? pctChange(c.expenses, p.expenses) : null;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <StatTile
+          label="Revenue"
+          value={compactCurrencyFmt.format(c?.revenue ?? 0)}
+          fullValue={currencyFmt.format(c?.revenue ?? 0)}
+          delta={revenueDelta}
+          deltaGoodDirection="up"
+        />
+        <StatTile
+          label="Expenses"
+          value={compactCurrencyFmt.format(c?.expenses ?? 0)}
+          fullValue={currencyFmt.format(c?.expenses ?? 0)}
+          delta={expensesDelta}
+          deltaGoodDirection="down"
+        />
+        <StatTile label="Gross Profit" value={compactCurrencyFmt.format(c?.grossProfit ?? 0)} fullValue={currencyFmt.format(c?.grossProfit ?? 0)} />
+        <StatTile label="Net Profit" value={compactCurrencyFmt.format(c?.netProfit ?? 0)} fullValue={currencyFmt.format(c?.netProfit ?? 0)} />
+        <StatTile label="Gross Margin" value={`${(c?.grossMarginPct ?? 0).toFixed(1)}%`} />
+        <StatTile label="Net Margin" value={`${(c?.netMarginPct ?? 0).toFixed(1)}%`} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <Card>
+          <div className="mb-1 font-display text-[15px] font-bold text-brand-ink">Revenue Trend</div>
+          <div className="mb-3 text-xs text-brand-inkMuted">{periodText}</div>
+          <TrendLineChart points={data?.trend ?? []} granularity={data?.granularity ?? "day"} />
+        </Card>
+        <Card className="flex flex-col">
+          <div className="mb-1 font-display text-[15px] font-bold text-brand-ink">Top 5 Products by Revenue</div>
+          <div className="mb-3 text-xs text-brand-inkMuted">{periodText}</div>
+          <HorizontalBarChart data={data?.topProducts.map((p) => ({ label: p.name, value: p.revenue })) ?? []} color={CHART_COLORS.sales} />
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.4fr]">
+        <Card className="flex flex-col">
+          <div className="mb-1 font-display text-[15px] font-bold text-brand-ink">Top 5 Expenses by Category</div>
+          <div className="mb-3 text-xs text-brand-inkMuted">{periodText}</div>
+          <HorizontalBarChart
+            data={data?.topExpenseCategories.map((e) => ({ label: e.category, value: e.amount })) ?? []}
+            color={CHART_COLORS.expenses}
+          />
+        </Card>
+        <Card>
+          <div className="mb-1 font-display text-[15px] font-bold text-brand-ink">Income vs Expenses</div>
+          <div className="mb-3 text-xs text-brand-inkMuted">{periodText}</div>
+          <ComboChart points={data?.trend ?? []} granularity={data?.granularity ?? "day"} />
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function StatTile({
+  label,
+  value,
+  fullValue,
+  delta,
+  deltaGoodDirection = "up",
+}: {
+  label: string;
+  value: string;
+  fullValue?: string;
+  delta?: number | null;
+  deltaGoodDirection?: "up" | "down";
+}) {
+  const isGood = delta == null ? null : deltaGoodDirection === "up" ? delta >= 0 : delta <= 0;
+  return (
+    <Card className="flex flex-col gap-1.5">
+      <span className="text-[11.5px] font-semibold text-brand-inkMuted">{label}</span>
+      <span className="truncate font-display text-xl font-bold text-brand-ink sm:text-2xl" title={fullValue}>
+        {value}
+      </span>
+      {delta != null && (
+        <span className={`flex items-center gap-1 text-[11px] font-semibold ${isGood ? "text-brand-accentText" : "text-brand-warn"}`}>
+          {delta > 0 ? "▲" : delta < 0 ? "▼" : "–"} {Math.abs(delta).toFixed(1)}% vs prior period
+        </span>
+      )}
+    </Card>
+  );
+}
+
+function LegendSwatch({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5 text-xs font-semibold text-brand-inkMuted">
+      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+      {label}
+    </span>
+  );
+}
+
+function TrendLineChart({ points, granularity }: { points: TimeseriesPoint[]; granularity: "day" | "month" }) {
+  if (points.length === 0) return <div className="py-10 text-center text-sm text-brand-inkMuted">No data for this period.</div>;
+
+  const width = 640;
+  const height = 200;
+  const padTop = 26;
+  const padBottom = 22;
+  const padX = 8;
+  const innerW = width - padX * 2;
+  const innerH = height - padTop - padBottom;
+
+  const values = points.map((p) => p.sales);
+  const max = Math.max(...values, 1);
+  const min = Math.min(0, ...values);
+  const range = max - min || 1;
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+  const xFor = (i: number) => padX + (points.length <= 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
+  const yFor = (v: number) => padTop + innerH - ((v - min) / range) * innerH;
+
+  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${xFor(i)} ${yFor(p.sales)}`).join(" ");
+  const areaPath = `${linePath} L ${xFor(points.length - 1)} ${padTop + innerH} L ${xFor(0)} ${padTop + innerH} Z`;
+  const avgY = yFor(avg);
+  const last = points[points.length - 1];
+  const labelStep = Math.max(1, Math.ceil(points.length / 6));
+
+  return (
+    <div>
+      <div className="overflow-x-auto">
+        <svg viewBox={`0 0 ${width} ${height}`} className={points.length > 14 ? "min-w-[720px]" : "w-full"} style={{ height: 200 }}>
+          <line x1={padX} y1={avgY} x2={width - padX} y2={avgY} stroke={AVG_LINE} strokeWidth={1} strokeDasharray="4 4" />
+          <text x={width - padX} y={avgY - 5} textAnchor="end" fontSize={10} fill={INK_MUTED}>
+            avg {compactCurrencyFmt.format(avg)}
+          </text>
+          <path d={areaPath} fill={CHART_COLORS.sales} opacity={0.08} stroke="none" />
+          <path d={linePath} fill="none" stroke={CHART_COLORS.sales} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          {points.map((p, i) => (
+            <circle key={p.label} cx={xFor(i)} cy={yFor(p.sales)} r={9} fill="transparent">
+              <title>{`${formatBucketLabel(p.label, granularity)}: ${currencyFmt.format(p.sales)}`}</title>
+            </circle>
+          ))}
+          <circle cx={xFor(points.length - 1)} cy={yFor(last.sales)} r={4} fill={CHART_COLORS.sales} stroke={SURFACE} strokeWidth={2} />
+          <text x={xFor(points.length - 1)} y={yFor(last.sales) - 10} textAnchor="end" fontSize={11} fontWeight={600} fill={INK}>
+            {compactCurrencyFmt.format(last.sales)}
+          </text>
+        </svg>
+      </div>
+      <div className="mt-1 flex px-2 text-[10px] text-brand-inkMuted">
+        {points.map((p, i) => (
+          <span key={p.label} className="flex-1 truncate text-center">
+            {i === 0 || i === points.length - 1 || i % labelStep === 0 ? formatBucketLabel(p.label, granularity) : ""}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ComboChart({ points, granularity }: { points: TimeseriesPoint[]; granularity: "day" | "month" }) {
+  if (points.length === 0) return <div className="py-10 text-center text-sm text-brand-inkMuted">No data for this period.</div>;
+
+  const width = 640;
+  const height = 200;
+  const padTop = 16;
+  const padBottom = 22;
+  const innerH = height - padTop - padBottom;
+
+  const allValues = points.flatMap((p) => [p.sales, p.expenses, p.profit]);
+  const max = Math.max(...allValues, 1);
+  const min = Math.min(0, ...allValues);
+  const range = max - min || 1;
+  const yFor = (v: number) => padTop + innerH - ((v - min) / range) * innerH;
+  const zeroY = yFor(0);
+
+  const n = points.length;
+  const slotW = width / n;
+  const barW = Math.min(slotW * 0.3, 20);
+  const gap = 2;
+  const xFor = (i: number) => i * slotW + slotW / 2;
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap gap-4">
+        <LegendSwatch color={CHART_COLORS.sales} label="Sales" />
+        <LegendSwatch color={CHART_COLORS.expenses} label="Expenses" />
+        <LegendSwatch color={CHART_COLORS.profit} label="Profit" />
+      </div>
+      <div className="overflow-x-auto">
+        <svg viewBox={`0 0 ${width} ${height}`} className={n > 10 ? "min-w-[720px]" : "w-full"} style={{ height: 200 }}>
+          <line x1={0} y1={zeroY} x2={width} y2={zeroY} stroke={GRID} strokeWidth={1} />
+          {points.map((p, i) => {
+            const cx = xFor(i);
+            const salesTop = Math.min(yFor(p.sales), zeroY);
+            const salesH = Math.max(Math.abs(yFor(p.sales) - zeroY), p.sales === 0 ? 0 : 2);
+            const expTop = Math.min(yFor(p.expenses), zeroY);
+            const expH = Math.max(Math.abs(yFor(p.expenses) - zeroY), p.expenses === 0 ? 0 : 2);
+            return (
+              <g key={p.label}>
+                <rect x={cx - barW - gap / 2} y={salesTop} width={barW} height={salesH} rx={3} fill={CHART_COLORS.sales}>
+                  <title>{`Sales — ${formatBucketLabel(p.label, granularity)}: ${currencyFmt.format(p.sales)}`}</title>
+                </rect>
+                <rect x={cx + gap / 2} y={expTop} width={barW} height={expH} rx={3} fill={CHART_COLORS.expenses}>
+                  <title>{`Expenses — ${formatBucketLabel(p.label, granularity)}: ${currencyFmt.format(p.expenses)}`}</title>
+                </rect>
+              </g>
+            );
+          })}
+          <path
+            d={points.map((p, i) => `${i === 0 ? "M" : "L"} ${xFor(i)} ${yFor(p.profit)}`).join(" ")}
+            fill="none"
+            stroke={CHART_COLORS.profit}
+            strokeWidth={2}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+          {points.map((p, i) => (
+            <circle key={p.label} cx={xFor(i)} cy={yFor(p.profit)} r={4} fill={CHART_COLORS.profit} stroke={SURFACE} strokeWidth={2}>
+              <title>{`Profit — ${formatBucketLabel(p.label, granularity)}: ${currencyFmt.format(p.profit)}`}</title>
+            </circle>
+          ))}
+        </svg>
+      </div>
+      <div className="mt-1 flex px-1 text-[10px] text-brand-inkMuted">
+        {points.map((p) => (
+          <span key={p.label} className="flex-1 truncate text-center">
+            {formatBucketLabel(p.label, granularity)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HorizontalBarChart({ data, color }: { data: { label: string; value: number }[]; color: string }) {
+  if (data.length === 0) return <div className="py-6 text-sm text-brand-inkMuted">No data for this period.</div>;
+  const max = Math.max(...data.map((d) => d.value), 1);
+  return (
+    <div className="flex flex-1 flex-col justify-center gap-3">
+      {data.map((d) => (
+        <div key={d.label} className="flex items-center gap-2.5">
+          <span className="w-24 shrink-0 truncate text-xs text-brand-inkMuted sm:w-28" title={d.label}>
+            {d.label}
+          </span>
+          <div className="h-5 min-w-0 flex-1 rounded-full bg-brand-bg">
+            <div
+              className="h-5 rounded-full transition-[width]"
+              style={{ width: `${Math.max((d.value / max) * 100, 4)}%`, backgroundColor: color }}
+            />
+          </div>
+          <span className="w-20 shrink-0 text-right text-xs font-semibold text-brand-ink">{currencyFmt.format(d.value)}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -633,52 +973,6 @@ function Row({ label, value, bold, accent, indent }: { label: string; value?: nu
       <span className={`font-semibold ${accent ? "text-brand-accentText" : bold ? "text-brand-ink" : ""}`}>
         {value === undefined ? "—" : currencyFmt.format(value)}
       </span>
-    </div>
-  );
-}
-
-const CHART_BAR_HEIGHT = 140;
-
-function ReportChart({ metric, data }: { metric: ChartMetric; data: TimeseriesReport | null }) {
-  const key = metric.toLowerCase() as "sales" | "expenses" | "profit";
-  const series = data?.series ?? [];
-  const total = series.reduce((sum, pt) => sum + pt[key], 0);
-  const maxAbs = Math.max(...series.map((pt) => Math.abs(pt[key])), 1);
-  const hasNegative = series.some((pt) => pt[key] < 0);
-
-  return (
-    <div>
-      <div className="mb-3 text-xl font-bold text-brand-ink">
-        {currencyFmt.format(total)} <span className="text-xs font-normal text-brand-inkMuted">total {metric.toLowerCase()}</span>
-      </div>
-      {series.length === 0 ? (
-        <div className="py-10 text-center text-sm text-brand-inkMuted">No data for this period.</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <div className={`flex items-stretch gap-2 px-1 ${series.length > 10 ? "min-w-[720px]" : ""}`} style={{ height: CHART_BAR_HEIGHT + 24 }}>
-            {series.map((pt) => {
-              const value = pt[key];
-              const barHeight = Math.max((Math.abs(value) / maxAbs) * (CHART_BAR_HEIGHT / (hasNegative ? 2 : 1)), value === 0 ? 0 : 3);
-              const barColor = value < 0 ? "bg-brand-warn" : "bg-gradient-to-b from-brand-accent to-brand-accentDeep";
-              return (
-                <div key={pt.label} className="flex min-w-[28px] flex-1 flex-col items-center">
-                  <div className="flex w-full flex-1 flex-col justify-end">
-                    {value >= 0 && <div className={`mx-auto w-full max-w-[26px] rounded-t-md ${barColor}`} style={{ height: barHeight }} />}
-                  </div>
-                  {hasNegative && (
-                    <div className="flex w-full flex-1 flex-col justify-start">
-                      {value < 0 && <div className={`mx-auto w-full max-w-[26px] rounded-b-md ${barColor}`} style={{ height: barHeight }} />}
-                    </div>
-                  )}
-                  <span className="mt-1.5 whitespace-nowrap text-[10px] text-brand-inkMuted">
-                    {formatBucketLabel(pt.label, data!.granularity)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
