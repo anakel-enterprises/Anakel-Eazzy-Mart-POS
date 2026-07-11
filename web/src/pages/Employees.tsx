@@ -47,6 +47,12 @@ export function Employees() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [resetPasswordError, setResetPasswordError] = useState<string | null>(null);
+  const [resetPasswordSuccess, setResetPasswordSuccess] = useState(false);
+
   const selected = employees.find((e) => e.id === selectedId) ?? null;
 
   async function load() {
@@ -70,6 +76,26 @@ export function Employees() {
     setEditRole(emp.role);
     setEditPermissions(emp.permissions);
     setSaveError(null);
+    setShowResetPassword(false);
+    setNewPassword("");
+    setResetPasswordError(null);
+    setResetPasswordSuccess(false);
+  }
+
+  async function resetPassword() {
+    if (!selected || newPassword.length < 8) return;
+    setResettingPassword(true);
+    setResetPasswordError(null);
+    try {
+      await api.put(`/api/employees/${selected.id}`, { password: newPassword });
+      setNewPassword("");
+      setShowResetPassword(false);
+      setResetPasswordSuccess(true);
+    } catch (err) {
+      setResetPasswordError(err instanceof ApiError ? err.message : "Couldn't reset password");
+    } finally {
+      setResettingPassword(false);
+    }
   }
 
   function applyRoleDefaults(role: Role) {
@@ -196,6 +222,63 @@ export function Employees() {
                   ))}
                 </select>
               </label>
+            </div>
+
+            <div className="border-b border-brand-border pb-4">
+              {!showResetPassword ? (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-sm text-brand-inkMuted">
+                    {resetPasswordSuccess ? "Password updated." : "Forgot their password? Set a new one here."}
+                  </span>
+                  <Button
+                    variant="secondary"
+                    className="w-fit px-3 py-1.5 text-xs"
+                    onClick={() => {
+                      setShowResetPassword(true);
+                      setResetPasswordSuccess(false);
+                    }}
+                  >
+                    Reset password
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <label className="flex-1 text-sm">
+                    <span className="mb-1 block font-medium text-brand-ink">New password</span>
+                    <input
+                      type="password"
+                      minLength={8}
+                      autoFocus
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="At least 8 characters"
+                      className="w-full rounded-lg border border-brand-border px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      className="px-3 py-2 text-xs"
+                      disabled={resettingPassword}
+                      onClick={() => {
+                        setShowResetPassword(false);
+                        setNewPassword("");
+                        setResetPasswordError(null);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      className="px-3 py-2 text-xs"
+                      disabled={resettingPassword || newPassword.length < 8}
+                      onClick={() => void resetPassword()}
+                    >
+                      {resettingPassword ? "Saving…" : "Save password"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {resetPasswordError && <div className="mt-2 text-sm font-medium text-brand-warn">{resetPasswordError}</div>}
             </div>
 
             {isAdmin ? (

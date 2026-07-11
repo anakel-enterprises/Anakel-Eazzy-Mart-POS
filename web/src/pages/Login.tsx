@@ -45,12 +45,12 @@ export function Login() {
         <label className="mb-3 block text-sm">
           <span className="mb-1 block font-medium text-brand-ink">Email</span>
           <input
-            type="email"
+            type="text"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
-            placeholder="admin@eazzymart.co.ke"
+            placeholder="email/username"
           />
         </label>
 
