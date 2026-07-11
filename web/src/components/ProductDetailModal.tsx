@@ -46,7 +46,7 @@ export function ProductDetailModal({
   const newStockQty = product.stockQty + deltaNum;
 
   function step(amount: number) {
-    setDelta((prev) => String(Math.max(-product.stockQty, (Math.trunc(Number(prev)) || 0) + amount)));
+    setDelta((prev) => String((Math.trunc(Number(prev)) || 0) + amount));
   }
 
   async function handleSave() {
@@ -56,8 +56,8 @@ export function ProductDetailModal({
       setError("Enter a product name and a valid selling price.");
       return;
     }
-    if (Number.isNaN(Number(delta)) || newStockQty < 0) {
-      setError(`That would take stock below zero (currently ${product.stockQty}).`);
+    if (Number.isNaN(Number(delta))) {
+      setError("Enter a valid stock adjustment.");
       return;
     }
     setSaving(true);
@@ -133,7 +133,9 @@ export function ProductDetailModal({
           </label>
 
           <div>
-            <span className="mb-1 block text-sm font-medium text-brand-ink">Adjust stock (currently {product.stockQty})</span>
+            <span className="mb-1 block text-sm font-medium text-brand-ink">
+              Adjust stock (currently {product.stockQty < 0 ? `${-product.stockQty} on backorder` : product.stockQty})
+            </span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -156,9 +158,11 @@ export function ProductDetailModal({
                 +
               </button>
             </div>
-            <div className="mt-1 text-xs text-brand-inkMuted">
+            <div className={`mt-1 text-xs ${newStockQty < 0 ? "font-semibold text-brand-warn" : "text-brand-inkMuted"}`}>
               {deltaNum === 0
                 ? "No change to stock"
+                : newStockQty < 0
+                ? `Still ${-newStockQty} on backorder after this restock (${deltaNum > 0 ? "+" : ""}${deltaNum})`
                 : `New stock will be ${newStockQty} (${deltaNum > 0 ? "+" : ""}${deltaNum})`}
             </div>
           </div>

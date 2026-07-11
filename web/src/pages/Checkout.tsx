@@ -224,8 +224,9 @@ export function Checkout() {
                 >
                   <div>
                     <div className="text-sm font-semibold text-brand-ink">{p.name}</div>
-                    <div className="text-xs text-brand-inkMuted">
-                      {p.sku} · {p.stockQty} in stock
+                    <div className={`text-xs ${p.stockQty <= 0 ? "font-semibold text-brand-warn" : "text-brand-inkMuted"}`}>
+                      {p.sku} ·{" "}
+                      {p.stockQty > 0 ? `${p.stockQty} in stock` : p.stockQty === 0 ? "Out of stock" : `${-p.stockQty} on backorder`}
                     </div>
                   </div>
                   <span className="text-sm font-semibold text-brand-ink">{currencyFmt.format(p.price)}</span>

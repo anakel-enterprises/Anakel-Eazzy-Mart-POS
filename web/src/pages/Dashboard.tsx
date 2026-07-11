@@ -86,7 +86,9 @@ export function Dashboard() {
                     <div className="text-[13px] font-semibold text-brand-ink">{p.name}</div>
                     <div className="text-[11.5px] text-brand-inkMuted">{p.sku}</div>
                   </div>
-                  <span className="text-[12.5px] font-bold text-brand-warn">{p.stockQty} left</span>
+                  <span className="text-[12.5px] font-bold text-brand-warn">
+                    {p.stockQty > 0 ? `${p.stockQty} left` : p.stockQty === 0 ? "Out of stock" : `${-p.stockQty} on backorder`}
+                  </span>
                 </div>
               ))}
               {data && data.lowStock.length === 0 && (

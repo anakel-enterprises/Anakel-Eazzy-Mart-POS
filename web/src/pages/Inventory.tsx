@@ -211,7 +211,9 @@ export function Inventory() {
                   <span className="text-brand-inkMuted">{p.category?.name ?? "—"}</span>
                   <span>{currencyFmt.format(Number(p.price))}</span>
                   <span className="text-brand-inkMuted">{p.cost != null ? currencyFmt.format(Number(p.cost)) : "—"}</span>
-                  <span className={p.stockQty <= p.lowStockThreshold ? "font-bold text-brand-warn" : ""}>{p.stockQty}</span>
+                  <span className={p.stockQty <= p.lowStockThreshold ? "font-bold text-brand-warn" : ""}>
+                    {p.stockQty < 0 ? `${p.stockQty} (backorder)` : p.stockQty}
+                  </span>
                 </div>
               ))}
               {products.length === 0 && <div className="py-6 text-sm text-brand-inkMuted">No products yet.</div>}
