@@ -5,7 +5,7 @@ import { ApiError } from "../lib/api";
 import { Button } from "../components/ui";
 
 export function Login() {
-  const { login, sessionExpired } = useAuth();
+  const { login, sessionExpired, sessionTimedOut } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -65,7 +65,12 @@ export function Login() {
           />
         </label>
 
-        {!error && sessionExpired && (
+        {!error && sessionTimedOut && (
+          <div className="mb-4 rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+            You were logged out after 15 minutes of inactivity — please log in again.
+          </div>
+        )}
+        {!error && !sessionTimedOut && sessionExpired && (
           <div className="mb-4 rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
             Your session expired — please log in again.
           </div>
