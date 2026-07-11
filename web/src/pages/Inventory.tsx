@@ -4,6 +4,7 @@ import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 import { BarcodeLabel } from "../components/BarcodeLabel";
 import { ProductDetailModal } from "../components/ProductDetailModal";
+import { ImportProductsModal } from "../components/ImportProductsModal";
 
 interface Product {
   id: string;
@@ -58,6 +59,7 @@ export function Inventory() {
   const [error, setError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showLabels, setShowLabels] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   // Tracks whether the user has hand-edited the SKU, so typing the name
   // keeps auto-generating it until they intentionally override it.
@@ -120,6 +122,9 @@ export function Inventory() {
       <Topbar title="Inventory" subtitle={`${products.length} products`} />
       <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 sm:p-6 lg:p-8">
         <div className="flex flex-wrap justify-end gap-3">
+          <Button variant="secondary" onClick={() => setShowImport(true)}>
+            Import products
+          </Button>
           <Button
             variant="secondary"
             onClick={() => setShowLabels((v) => !v)}
@@ -240,6 +245,8 @@ export function Inventory() {
           onSaved={() => void load()}
         />
       )}
+
+      {showImport && <ImportProductsModal onClose={() => setShowImport(false)} onImported={() => void load()} />}
     </>
   );
 }
