@@ -28,10 +28,11 @@ interface EmployeeForm {
   name: string;
   email: string;
   password: string;
+  confirmPassword: string;
   role: Role;
 }
 
-const emptyForm: EmployeeForm = { name: "", email: "", password: "", role: "CASHIER" };
+const emptyForm: EmployeeForm = { name: "", email: "", password: "", confirmPassword: "", role: "CASHIER" };
 
 export function Employees() {
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -49,6 +50,7 @@ export function Employees() {
 
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [resettingPassword, setResettingPassword] = useState(false);
   const [resetPasswordError, setResetPasswordError] = useState<string | null>(null);
   const [resetPasswordSuccess, setResetPasswordSuccess] = useState(false);
@@ -78,17 +80,23 @@ export function Employees() {
     setSaveError(null);
     setShowResetPassword(false);
     setNewPassword("");
+    setConfirmNewPassword("");
     setResetPasswordError(null);
     setResetPasswordSuccess(false);
   }
 
   async function resetPassword() {
     if (!selected || newPassword.length < 8) return;
+    if (newPassword !== confirmNewPassword) {
+      setResetPasswordError("Passwords don't match.");
+      return;
+    }
     setResettingPassword(true);
     setResetPasswordError(null);
     try {
       await api.put(`/api/employees/${selected.id}`, { password: newPassword });
       setNewPassword("");
+      setConfirmNewPassword("");
       setShowResetPassword(false);
       setResetPasswordSuccess(true);
     } catch (err) {
@@ -105,8 +113,12 @@ export function Employees() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (form.password !== form.confirmPassword) {
+      setError("Passwords don't match.");
+      return;
+    }
     try {
-      await api.post("/api/employees", form);
+      await api.post("/api/employees", { name: form.name, email: form.email, password: form.password, role: form.role });
       setForm(emptyForm);
       setShowForm(false);
       await load();
@@ -156,6 +168,7 @@ export function Employees() {
                 <input required placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
                 <input required type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
                 <input required type="password" minLength={8} placeholder="Temporary password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+                <input required type="password" minLength={8} placeholder="Confirm password" value={form.confirmPassword} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
                 <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
                   {Object.entries(ROLE_LABELS).map(([value, label]) => (
                     <option key={value} value={value}>
@@ -242,19 +255,32 @@ export function Employees() {
                   </Button>
                 </div>
               ) : (
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                  <label className="flex-1 text-sm">
-                    <span className="mb-1 block font-medium text-brand-ink">New password</span>
-                    <input
-                      type="password"
-                      minLength={8}
-                      autoFocus
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="At least 8 characters"
-                      className="w-full rounded-lg border border-brand-border px-3 py-2 text-sm"
-                    />
-                  </label>
+                <div className="flex flex-col gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="text-sm">
+                      <span className="mb-1 block font-medium text-brand-ink">New password</span>
+                      <input
+                        type="password"
+                        minLength={8}
+                        autoFocus
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="At least 8 characters"
+                        className="w-full rounded-lg border border-brand-border px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-1 block font-medium text-brand-ink">Confirm password</span>
+                      <input
+                        type="password"
+                        minLength={8}
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        placeholder="Re-enter the password"
+                        className="w-full rounded-lg border border-brand-border px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
                   <div className="flex gap-2">
                     <Button
                       variant="secondary"
@@ -263,6 +289,7 @@ export function Employees() {
                       onClick={() => {
                         setShowResetPassword(false);
                         setNewPassword("");
+                        setConfirmNewPassword("");
                         setResetPasswordError(null);
                       }}
                     >
@@ -270,7 +297,7 @@ export function Employees() {
                     </Button>
                     <Button
                       className="px-3 py-2 text-xs"
-                      disabled={resettingPassword || newPassword.length < 8}
+                      disabled={resettingPassword || newPassword.length < 8 || confirmNewPassword.length < 8}
                       onClick={() => void resetPassword()}
                     >
                       {resettingPassword ? "Saving…" : "Save password"}
