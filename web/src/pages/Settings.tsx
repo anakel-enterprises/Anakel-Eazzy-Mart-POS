@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 
@@ -8,6 +8,83 @@ interface Store {
   address: string | null;
   phone: string | null;
   currency: string;
+}
+
+const RESET_CONFIRM_PHRASE = "DELETE";
+
+interface ResetResult {
+  sales: number;
+  stockAdjustments: number;
+  registerSessions: number;
+  creditPayments: number;
+  customers: number;
+  supplierTransactions: number;
+  suppliers: number;
+  expenses: number;
+  expenseCategories: number;
+  incomes: number;
+  promotions: number;
+  coupons: number;
+  products: number;
+  categories: number;
+}
+
+function ResetDataSection() {
+  const [confirmText, setConfirmText] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ResetResult | null>(null);
+
+  async function handleReset() {
+    if (confirmText !== RESET_CONFIRM_PHRASE) return;
+    const confirmed = window.confirm(
+      "This permanently deletes all products, stock, sales, cash register history, customers, suppliers, expenses, income, promotions, and coupons for this store. Employee accounts and these store settings are kept. This cannot be undone — continue?"
+    );
+    if (!confirmed) return;
+
+    setResetting(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await api.post<{ deleted: ResetResult }>("/api/settings/reset-data", { confirm: "DELETE" });
+      setResult(res.deleted);
+      setConfirmText("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't reset data — check your connection and try again.");
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  return (
+    <Card className="max-w-lg border-brand-warn/40 bg-brand-warnBg/30">
+      <div className="mb-1 font-display text-[15px] font-bold text-brand-warn">Reset store data</div>
+      <p className="mb-3 text-sm text-brand-inkMuted">
+        Permanently deletes all products, stock, sales, cash register history, customers, suppliers, expenses, income,
+        promotions, and coupons — useful for clearing out test data before you start selling for real. Employee accounts
+        and these store settings are kept. This cannot be undone.
+      </p>
+      <label className="mb-3 block text-sm">
+        <span className="mb-1 block font-medium text-brand-ink">Type DELETE to confirm</span>
+        <input
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          placeholder="DELETE"
+          className="w-full rounded-lg border border-brand-border px-3 py-2"
+        />
+      </label>
+      {error && <div className="mb-3 text-sm font-medium text-brand-warn">{error}</div>}
+      {result && (
+        <div className="mb-3 rounded-lg bg-white px-3 py-2 text-sm text-brand-ink">
+          Deleted {result.products} products, {result.sales} sales, {result.customers} customers, {result.suppliers}{" "}
+          suppliers, and all related records. Employees and store settings were kept.
+        </div>
+      )}
+      <Button variant="danger" disabled={confirmText !== RESET_CONFIRM_PHRASE || resetting} onClick={() => void handleReset()}>
+        {resetting ? "Resetting…" : "Permanently reset store data"}
+      </Button>
+    </Card>
+  );
 }
 
 export function Settings() {
@@ -56,6 +133,8 @@ export function Settings() {
             </Button>
           </form>
         </Card>
+
+        <ResetDataSection />
       </div>
     </>
   );
