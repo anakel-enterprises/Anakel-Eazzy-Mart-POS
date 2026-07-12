@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icons/icon-192.png", "icons/icon-512.png"],
+      includeAssets: ["icons/icon-192.png", "icons/icon-512.png", "apple-touch-icon.png", "favicon.png"],
       manifest: {
         name: "Anakel Eazzy Mart POS",
         short_name: "Eazzy Mart POS",
@@ -17,8 +17,13 @@ export default defineConfig({
         display: "standalone",
         start_url: "/",
         icons: [
-          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
-          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
+          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          // Same full-bleed design already keeps its content within Android's
+          // maskable safe zone, so it doubles as the maskable icon without a
+          // separate asset — no risk of the "A" or leaf getting cropped.
+          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "maskable" },
+          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
       },
       workbox: {
