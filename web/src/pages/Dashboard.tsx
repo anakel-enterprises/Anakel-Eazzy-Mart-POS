@@ -1,32 +1,38 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
 import { getCached } from "../lib/cachedFetch";
+import { SALES_SYNCED_EVENT } from "../lib/sync";
+import { overlayDashboard } from "../lib/offlineStats";
+import { localDb } from "../db/localDb";
+import { useAuth } from "../context/AuthContext";
+import type { DashboardData } from "../types/reports";
 import { Topbar } from "../components/Topbar";
 import { Card, StatCard } from "../components/ui";
-
-interface DashboardData {
-  todaysSalesTotal: number;
-  todaysTransactionCount: number;
-  weeklySales: { date: string; total: number }[];
-  lowStock: { id: string; name: string; sku: string; stockQty: number; lowStockThreshold: number }[];
-  recentSales: {
-    id: string;
-    total: number;
-    paymentMethod: string;
-    status: string;
-    items: { quantity: number }[];
-    cashier: { name: string };
-    createdAt: string;
-  }[];
-}
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 });
 const dayLabel = (iso: string) => new Date(iso).toLocaleDateString("en-KE", { weekday: "short" });
 
 export function Dashboard() {
+  const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [stale, setStale] = useState(false);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Sales rung up on this device that the server doesn't know about yet —
+  // reactively re-queried by Dexie the instant a sale is queued or its sync
+  // status changes, which is what makes the stats below update the moment a
+  // cashier completes a sale, with no polling and no network round trip.
+  const unsyncedSales = useLiveQuery(
+    () => localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+
+  const displayData = useMemo(
+    () => (data ? overlayDashboard(data, unsyncedSales, { id: user?.id ?? "", name: user?.name ?? "You" }) : null),
+    [data, unsyncedSales, user]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -46,16 +52,23 @@ export function Dashboard() {
 
     void load();
     // Re-fetch the moment connectivity returns, so a dashboard left open
-    // through an outage catches up without needing a manual refresh.
+    // through an outage catches up without needing a manual refresh. Also
+    // re-fetch once a sync batch actually confirms — "online" alone can fire
+    // (and this refetch can resolve) before flushPendingSales finishes
+    // syncing, which would otherwise cache a stale pre-sync snapshot with no
+    // further trigger to correct it.
     const onOnline = () => void load();
     window.addEventListener("online", onOnline);
+    window.addEventListener(SALES_SYNCED_EVENT, onOnline);
     return () => {
       cancelled = true;
       window.removeEventListener("online", onOnline);
+      window.removeEventListener(SALES_SYNCED_EVENT, onOnline);
     };
   }, []);
 
-  const maxWeekly = data ? Math.max(...data.weeklySales.map((d) => d.total), 1) : 1;
+  const maxWeekly = displayData ? Math.max(...displayData.weeklySales.map((d) => d.total), 1) : 1;
+  const unsyncedCount = unsyncedSales?.length ?? 0;
 
   return (
     <>
@@ -71,24 +84,33 @@ export function Dashboard() {
             Will update automatically once you're back online.
           </div>
         )}
+        {!error && unsyncedCount > 0 && (
+          <div className="rounded-lg bg-brand-accent/10 px-3 py-2 text-sm font-medium text-brand-accentText">
+            Includes {unsyncedCount} sale{unsyncedCount === 1 ? "" : "s"} made on this device that {unsyncedCount === 1 ? "hasn't" : "haven't"}{" "}
+            synced yet — figures are estimates until they do.
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-          <StatCard label="Today's Sales" value={data ? currencyFmt.format(data.todaysSalesTotal) : "—"} delta="Updated live" />
-          <StatCard label="Transactions" value={data ? String(data.todaysTransactionCount) : "—"} />
+          <StatCard label="Today's Sales" value={displayData ? currencyFmt.format(displayData.todaysSalesTotal) : "—"} delta="Updated live" />
+          <StatCard label="Transactions" value={displayData ? String(displayData.todaysTransactionCount) : "—"} />
           <StatCard
             label="Low Stock Items"
-            value={data ? String(data.lowStock.length) : "—"}
-            delta={data && data.lowStock.length > 0 ? "Needs attention" : undefined}
+            value={displayData ? String(displayData.lowStock.length) : "—"}
+            delta={displayData && displayData.lowStock.length > 0 ? "Needs attention" : undefined}
             deltaTone="warning"
           />
-          <StatCard label="Weekly Total" value={data ? currencyFmt.format(data.weeklySales.reduce((s, d) => s + d.total, 0)) : "—"} />
+          <StatCard
+            label="Weekly Total"
+            value={displayData ? currencyFmt.format(displayData.weeklySales.reduce((s, d) => s + d.total, 0)) : "—"}
+          />
         </div>
 
         <div className="grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[1.4fr_1fr]">
           <Card className="flex flex-col">
             <div className="mb-4 font-display text-[15px] font-bold text-brand-ink">Weekly Sales</div>
             <div className="flex flex-1 items-end gap-2 px-2 pb-2 sm:gap-4">
-              {data?.weeklySales.map((d) => (
+              {displayData?.weeklySales.map((d) => (
                 <div key={d.date} className="flex flex-1 flex-col items-center gap-2">
                   <div
                     className="w-full max-w-[34px] rounded-t-lg rounded-b-[3px] bg-gradient-to-b from-brand-accent to-brand-accentDeep"
@@ -104,11 +126,11 @@ export function Dashboard() {
             <div className="mb-4 flex items-center justify-between">
               <span className="font-display text-[15px] font-bold text-brand-ink">Low Stock Alerts</span>
               <span className="rounded-full bg-brand-warn px-2.5 py-0.5 text-xs font-bold text-white">
-                {data?.lowStock.length ?? 0}
+                {displayData?.lowStock.length ?? 0}
               </span>
             </div>
             <div className="flex flex-col gap-2.5 overflow-auto">
-              {data?.lowStock.map((p) => (
+              {displayData?.lowStock.map((p) => (
                 <div key={p.id} className="flex items-center justify-between rounded-[10px] bg-brand-bg px-3 py-2.5">
                   <div>
                     <div className="text-[13px] font-semibold text-brand-ink">{p.name}</div>
@@ -119,7 +141,7 @@ export function Dashboard() {
                   </span>
                 </div>
               ))}
-              {data && data.lowStock.length === 0 && (
+              {displayData && displayData.lowStock.length === 0 && (
                 <div className="text-sm text-brand-inkMuted">Everything is well stocked.</div>
               )}
             </div>
@@ -140,7 +162,7 @@ export function Dashboard() {
                 <span>PAYMENT</span>
                 <span>STATUS</span>
               </div>
-              {data?.recentSales.map((s) => (
+              {displayData?.recentSales.map((s) => (
                 <div
                   key={s.id}
                   className="grid grid-cols-[1fr_1.6fr_0.9fr_0.9fr_1fr_0.9fr] items-center border-b border-brand-border/60 py-2.5 text-[13px] text-brand-ink"

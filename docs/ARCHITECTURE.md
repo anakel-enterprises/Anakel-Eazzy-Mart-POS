@@ -238,9 +238,9 @@ sequenceDiagram
 - The client-computed total shown mid-sale is explicitly an *estimate* — the server is authoritative
   and applies its own pricing tier, promotion, and coupon logic independently once the sale syncs
   (see [API.md](./API.md#post-apisales)).
-- Dashboard and Reports show cached figures offline (see below); everything else (employee management,
-  supplier ledgers, settings, etc.) has no offline support — those pages call the API directly and
-  simply fail if unreachable.
+- Dashboard and Reports show cached figures offline, live-adjusted for sales rung up on this device that
+  haven't synced yet (see below); everything else (employee management, supplier ledgers, settings,
+  etc.) has no offline support — those pages call the API directly and simply fail if unreachable.
 
 ### Offline statistics
 
@@ -288,7 +288,72 @@ mismatch — their path is already stable, so no separate cache key is needed.
 **What this doesn't do**: cached stats reflect whatever this specific device last saw, which may lag
 behind sales rung up on other tills while this one was offline — there's no cross-device merge, only
 "last successful fetch, per device." This mirrors the same single-device scope every other part of the
-offline layer already has (the product cache, the pending-sale queue).
+offline layer already has (the product cache, the pending-sale queue). What the cache-fallback layer
+above *doesn't* do on its own is reflect a sale rung up on **this** device after the last successful
+fetch — that's what the live overlay below is for.
+
+### Live overlay of unsynced sales
+
+The cache-fallback layer above only ever shows the server's last-known snapshot — it has no way to know
+about a sale that was just rung up on this device and hasn't synced yet. `web/src/lib/offlineStats.ts`
+closes that gap: every overlay function takes a report snapshot (live-fetched or cache-fallback) plus
+this device's currently-unsynced `pendingSales` and returns an adjusted snapshot with those sales'
+effect already added in — so Dashboard and every Reports tab update the moment a sale completes,
+offline or on, with no network round trip.
+
+```mermaid
+sequenceDiagram
+    participant Checkout
+    participant IDB as Dexie (pendingSales)
+    participant UI as Dashboard/Reports
+    participant Overlay as offlineStats.ts
+
+    Checkout->>IDB: queueSale() — put(syncStatus: pending)
+    IDB-->>UI: useLiveQuery re-fires (reactive, no polling)
+    UI->>Overlay: overlayDashboard(cachedData, unsyncedSales)
+    Overlay-->>UI: adjusted totals, weekly trend, recent orders, low stock
+    Note over UI: Repeats for every Reports tab (Sales, Profit,<br/>P&L, Inventory, Finance, Customers, Employees)
+```
+
+Each page queries `pendingSales` (filtered to `syncStatus` `pending`/`error` — never `synced`, so a sale
+already reflected in the next server fetch is never double-counted) via `useLiveQuery`, which reactively
+re-runs whenever that Dexie table changes — no polling, no manual refresh trigger needed. The overlay
+itself is a plain `useMemo` over `{ cachedData, unsyncedSales }`, so it's pure UI-layer math with no
+side effects; the cache written by `getCached()` is never mutated.
+
+**Why every report needed its own overlay function, not one generic one**: each report aggregates sales
+differently (a day-bucketed trend, a per-product breakdown, a per-payment-method split, a per-customer
+top-10, a per-cashier ranking, a point-in-time stock valuation), so `overlayDashboard`,
+`overlaySalesSummary`, `overlayProfit`, `overlayProfitLoss`, `overlayAnalytics`, `overlayInventory`,
+`overlayFinance`, `overlayCustomers`, and `overlayEmployeePerformance` each mirror their corresponding
+server route's exact aggregation logic (bucket key format, which fields sum vs. recompute, top-N
+truncation) closely enough to add a local sale's effect in the same shape the server would produce.
+`Suppliers` has no overlay — supplier balances aren't sales-driven.
+
+**Inherent estimation limits** (documented in code, not hidden): this all happens before the server has
+actually processed the sale, for the same reason Checkout's own on-screen total is labeled "estimated" —
+- **No discount is known client-side.** A sale's estimated value is `sum(unitPrice × quantity)`; any
+  promotion or coupon the server would apply on sync isn't visible yet, so the true post-sync figure can
+  come in lower.
+- **Tiered pricing isn't resolved client-side.** Checkout always caches retail `price`; wholesale/VIP
+  pricing is resolved server-side on sync, so a tiered customer's estimate can run high until then.
+- **COGS needs product cost, which checkout doesn't otherwise use.** `CachedProduct` gained a `cost`
+  field (populated by `refreshProductCache()` alongside price/stock) purely so `overlayProfit`,
+  `overlayProfitLoss`, and `overlayAnalytics` can estimate COGS without a network round trip.
+- **Two partial-list reports (Dashboard's low-stock, the Inventory tab) only adjust products already
+  present in the snapshot.** The server returns a top-10 list for Dashboard and the full active catalog
+  for Inventory; a product that would newly cross its low-stock threshold purely from an offline sale
+  won't appear in Dashboard's list until the next real fetch (Inventory has no such gap, since it always
+  returns every product).
+
+**Closing the "just synced" race** (`SALES_SYNCED_EVENT`, `web/src/lib/sync.ts`): when connectivity
+returns, both the sync engine's `flushPendingSales()` and each report's own `"online"` refetch listener
+fire off their own independent async chains. `flushPendingSales()` awaits a reachability check and then
+each sale POST sequentially; a report's `GET` can easily resolve *first*, caching a genuinely fresh —
+but pre-sync — snapshot with no further trigger to correct it once the sale actually finishes syncing
+moments later. `flushPendingSales()` dispatches a `pos:sales-synced` `window` event once a batch
+confirms at least one sale, and Dashboard/Reports listen for it alongside `"online"`, forcing a second
+refetch right when the server's own numbers are guaranteed to be current.
 
 ## M-Pesa STK Push integration
 

@@ -180,6 +180,7 @@ export function Checkout() {
       status: "COMPLETED",
       createdAt: new Date().toISOString(),
       customerId: customer?.id,
+      customerName: customer?.name,
       couponCode: couponCode.trim() || undefined,
       splitPayments: paymentMethod === "SPLIT" ? splitRows.filter((r) => r.amount > 0) : undefined,
       mpesaCheckoutRequestId,

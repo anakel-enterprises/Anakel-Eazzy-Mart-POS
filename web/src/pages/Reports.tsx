@@ -1,6 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
 import { getCached } from "../lib/cachedFetch";
 import { downloadCsv } from "../lib/csv";
+import { SALES_SYNCED_EVENT } from "../lib/sync";
+import { localDb } from "../db/localDb";
+import { useAuth } from "../context/AuthContext";
+import {
+  filterSalesByRange,
+  overlayAnalytics,
+  overlayCustomers,
+  overlayEmployeePerformance,
+  overlayFinance,
+  overlayInventory,
+  overlayProfit,
+  overlayProfitLoss,
+  overlaySalesSummary,
+} from "../lib/offlineStats";
+import type {
+  AnalyticsReport,
+  CustomersReport,
+  EmployeeRow,
+  FinanceReport,
+  InventoryReport,
+  ProfitLossReport,
+  ProfitReport,
+  SalesSummary,
+  SuppliersReport,
+  TimeseriesPoint,
+} from "../types/reports";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 
@@ -15,92 +42,6 @@ const INK_MUTED = "#65635d";
 const SURFACE = "#f9f8f5";
 const GRID = "#e9e8e4";
 const AVG_LINE = "#c9c6bd";
-
-interface SalesSummary {
-  totals: { _sum: { subtotal: number | null; taxTotal: number | null; total: number | null }; _count: number };
-  byPaymentMethod: { paymentMethod: string; _sum: { total: number | null }; _count: number }[];
-  topProducts: { productId: string; name: string; _sum: { quantity: number | null; lineTotal: number | null } }[];
-}
-
-interface ProfitReport {
-  revenue: number;
-  cogs: number;
-  grossProfit: number;
-  byProduct: { productId: string; name: string; revenue: number; cost: number; profit: number }[];
-}
-
-interface InventoryReport {
-  productCount: number;
-  totalUnits: number;
-  retailValue: number;
-  costValue: number;
-  potentialProfit: number;
-  products: { id: string; name: string; sku: string; stockQty: number; price: number; cost: number | null }[];
-}
-
-interface FinanceReport {
-  revenue: number;
-  expenses: number;
-  otherIncome: number;
-  netCashFlow: number;
-  creditOutstanding: number;
-}
-
-interface CustomersReport {
-  totalCustomers: number;
-  creditOutstanding: number;
-  topCustomers: { customerId: string; name: string; totalSpent: number; orderCount: number }[];
-}
-
-interface SuppliersReport {
-  totalOwed: number;
-  suppliers: { id: string; name: string; balance: number }[];
-}
-
-interface EmployeeRow {
-  cashierId: string;
-  name: string;
-  totalSales: number;
-  transactionCount: number;
-}
-
-interface ProfitLossReport {
-  transactionCount: number;
-  netSales: number;
-  cogs: number;
-  grossProfit: number;
-  otherIncome: number;
-  expensesByCategory: { category: string; amount: number }[];
-  totalExpenses: number;
-  netProfit: number;
-}
-
-interface TimeseriesPoint {
-  label: string;
-  sales: number;
-  expenses: number;
-  profit: number;
-}
-
-interface PeriodTotals {
-  revenue: number;
-  expenses: number;
-  cogs: number;
-  grossProfit: number;
-  otherIncome: number;
-  netProfit: number;
-  grossMarginPct: number;
-  netMarginPct: number;
-}
-
-interface AnalyticsReport {
-  current: PeriodTotals;
-  previous: PeriodTotals | null;
-  granularity: "day" | "month";
-  trend: TimeseriesPoint[];
-  topProducts: { name: string; revenue: number }[];
-  topExpenseCategories: { category: string; amount: number }[];
-}
 
 function formatBucketLabel(label: string, granularity: "day" | "month"): string {
   if (granularity === "month") {
@@ -169,6 +110,62 @@ export function Reports() {
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
 
+  const { user } = useAuth();
+  const currentUser = useMemo(() => ({ id: user?.id ?? "", name: user?.name ?? "You" }), [user]);
+
+  // Sales rung up on this device the server doesn't know about yet —
+  // reactively re-queried by Dexie the instant a sale is queued or its sync
+  // status changes, so every report below updates the moment a cashier
+  // completes a sale, offline or on, with no polling or network round trip.
+  const unsyncedSales = useLiveQuery(
+    () => localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+  // Cost isn't on PendingSaleItem (checkout only knows retail price), so
+  // COGS-dependent overlays (Profit, P&L, Analytics) look it up here from the
+  // same local product cache Checkout uses — see lib/sync.ts's
+  // refreshProductCache().
+  const productCost = useLiveQuery(
+    async () => new Map((await localDb.products.toArray()).filter((p) => p.cost != null).map((p) => [p.id, p.cost as number])),
+    [],
+    new Map<string, number>()
+  );
+
+  const periodSales = useMemo(() => {
+    const { from, to } = periodRange(period, customFrom, customTo);
+    return filterSalesByRange(unsyncedSales, from, to);
+  }, [unsyncedSales, period, customFrom, customTo]);
+
+  const displayProfitLoss = useMemo(
+    () => (profitLoss ? overlayProfitLoss(profitLoss, periodSales, productCost) : null),
+    [profitLoss, periodSales, productCost]
+  );
+  const displayAnalytics = useMemo(
+    () => (analytics ? overlayAnalytics(analytics, periodSales, productCost) : null),
+    [analytics, periodSales, productCost]
+  );
+  const displaySales = useMemo(() => (sales ? overlaySalesSummary(sales, periodSales) : null), [sales, periodSales]);
+  const displayProfit = useMemo(
+    () => (profit ? overlayProfit(profit, periodSales, productCost) : null),
+    [profit, periodSales, productCost]
+  );
+  // Inventory is a point-in-time stock snapshot, not date-ranged — every
+  // unsynced sale (regardless of when it was rung up) has already decremented
+  // *current* stock, so it uses the full unsynced list, not periodSales.
+  const displayInventory = useMemo(
+    () => (inventory ? overlayInventory(inventory, unsyncedSales) : null),
+    [inventory, unsyncedSales]
+  );
+  const displayFinance = useMemo(() => (finance ? overlayFinance(finance, periodSales) : null), [finance, periodSales]);
+  const displayCustomers = useMemo(() => (customers ? overlayCustomers(customers, periodSales) : null), [customers, periodSales]);
+  const displayEmployees = useMemo(
+    () => (employees ? overlayEmployeePerformance(employees, periodSales, currentUser) : null),
+    [employees, periodSales, currentUser]
+  );
+
+  const unsyncedCountForTab = tab === "Inventory" ? unsyncedSales.length : periodSales.length;
+
   function rangeQuery() {
     const { from, to } = periodRange(period, customFrom, customTo);
     const params = new URLSearchParams();
@@ -215,11 +212,15 @@ export function Reports() {
     };
     load();
     // Re-fetch the moment connectivity returns, so a report left open
-    // through an outage catches up without a manual refresh.
+    // through an outage catches up without a manual refresh. Also re-fetch
+    // once a sync batch actually confirms — see the matching comment in
+    // Dashboard.tsx for why "online" alone isn't enough.
     window.addEventListener("online", load);
+    window.addEventListener(SALES_SYNCED_EVENT, load);
     return () => {
       cancelledRef.current = true;
       window.removeEventListener("online", load);
+      window.removeEventListener(SALES_SYNCED_EVENT, load);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, period, customFrom, customTo]);
@@ -259,24 +260,26 @@ export function Reports() {
     };
     load();
     window.addEventListener("online", load);
+    window.addEventListener(SALES_SYNCED_EVENT, load);
     return () => {
       cancelledRef.current = true;
       window.removeEventListener("online", load);
+      window.removeEventListener(SALES_SYNCED_EVENT, load);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, period, customFrom, customTo]);
 
   function downloadPnl() {
-    if (!profitLoss) return;
+    if (!displayProfitLoss) return;
     const slug = period === "Custom" && customFrom && customTo ? `${customFrom}_to_${customTo}` : period.toLowerCase().replace(/\s+/g, "-");
     downloadCsv(`profit-and-loss-${slug}.csv`, ["Line", "Amount (KSh)"], [
-      ["Net Sales", profitLoss.netSales],
-      ["Cost of Goods Sold", -profitLoss.cogs],
-      ["Gross Profit", profitLoss.grossProfit],
-      ["Other Income", profitLoss.otherIncome],
-      ...profitLoss.expensesByCategory.map((e): [string, number] => [`Expense: ${e.category}`, -e.amount]),
-      ["Total Expenses", -profitLoss.totalExpenses],
-      ["Net Profit", profitLoss.netProfit],
+      ["Net Sales", displayProfitLoss.netSales],
+      ["Cost of Goods Sold", -displayProfitLoss.cogs],
+      ["Gross Profit", displayProfitLoss.grossProfit],
+      ["Other Income", displayProfitLoss.otherIncome],
+      ...displayProfitLoss.expensesByCategory.map((e): [string, number] => [`Expense: ${e.category}`, -e.amount]),
+      ["Total Expenses", -displayProfitLoss.totalExpenses],
+      ["Net Profit", displayProfitLoss.netProfit],
     ]);
   }
 
@@ -309,6 +312,12 @@ export function Reports() {
             Will update automatically once you're back online.
           </div>
         )}
+        {!loadError && tab !== "Suppliers" && unsyncedCountForTab > 0 && (
+          <div className="rounded-lg bg-brand-accent/10 px-3 py-2 text-sm font-medium text-brand-accentText">
+            Includes {unsyncedCountForTab} sale{unsyncedCountForTab === 1 ? "" : "s"} made on this device that{" "}
+            {unsyncedCountForTab === 1 ? "hasn't" : "haven't"} synced yet — figures are estimates until they do.
+          </div>
+        )}
 
         {showDateRange && (
           <DateRangeControl
@@ -327,28 +336,28 @@ export function Reports() {
         {tab === "P&L" && (
           <>
             <div className="flex justify-end">
-              <Button variant="secondary" onClick={downloadPnl} disabled={!profitLoss}>
+              <Button variant="secondary" onClick={downloadPnl} disabled={!displayProfitLoss}>
                 Download CSV
               </Button>
             </div>
 
-            <AnalyticsDashboard data={analytics} periodText={periodLabel(period, customFrom, customTo)} />
+            <AnalyticsDashboard data={displayAnalytics} periodText={periodLabel(period, customFrom, customTo)} />
 
             <Card>
               <div className="mb-1 font-display text-[15px] font-bold text-brand-ink">
                 Profit & Loss — {periodLabel(period, customFrom, customTo)}
               </div>
-              <div className="mb-4 text-xs text-brand-inkMuted">{profitLoss?.transactionCount ?? 0} transactions in this period</div>
+              <div className="mb-4 text-xs text-brand-inkMuted">{displayProfitLoss?.transactionCount ?? 0} transactions in this period</div>
               <div className="flex flex-col divide-y divide-brand-border/60">
-                <Row label="Net Sales" value={profitLoss?.netSales} />
-                <Row label="Cost of Goods Sold" value={profitLoss ? -profitLoss.cogs : undefined} />
-                <Row label="Gross Profit" value={profitLoss?.grossProfit} bold />
-                <Row label="Other Income" value={profitLoss?.otherIncome} />
-                {profitLoss?.expensesByCategory.map((e) => (
+                <Row label="Net Sales" value={displayProfitLoss?.netSales} />
+                <Row label="Cost of Goods Sold" value={displayProfitLoss ? -displayProfitLoss.cogs : undefined} />
+                <Row label="Gross Profit" value={displayProfitLoss?.grossProfit} bold />
+                <Row label="Other Income" value={displayProfitLoss?.otherIncome} />
+                {displayProfitLoss?.expensesByCategory.map((e) => (
                   <Row key={e.category} label={`Expense — ${e.category}`} value={-e.amount} indent />
                 ))}
-                <Row label="Total Expenses" value={profitLoss ? -profitLoss.totalExpenses : undefined} />
-                <Row label="Net Profit" value={profitLoss?.netProfit} bold accent />
+                <Row label="Total Expenses" value={displayProfitLoss ? -displayProfitLoss.totalExpenses : undefined} />
+                <Row label="Net Profit" value={displayProfitLoss?.netProfit} bold accent />
               </div>
             </Card>
           </>
@@ -359,13 +368,13 @@ export function Reports() {
             <div className="flex justify-end">
               <Button
                 variant="secondary"
-                disabled={!sales}
+                disabled={!displaySales}
                 onClick={() =>
-                  sales &&
+                  displaySales &&
                   downloadCsv(
                     "sales-top-products.csv",
                     ["Product", "Qty Sold", "Revenue (KSh)"],
-                    sales.topProducts.map((p) => [p.name, p._sum.quantity ?? 0, p._sum.lineTotal ?? 0])
+                    displaySales.topProducts.map((p) => [p.name, p._sum.quantity ?? 0, p._sum.lineTotal ?? 0])
                   )
                 }
               >
@@ -375,15 +384,15 @@ export function Reports() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Total Revenue</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(sales?.totals._sum.total ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(displaySales?.totals._sum.total ?? 0)}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Transactions</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{sales?.totals._count ?? 0}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{displaySales?.totals._count ?? 0}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Tax Collected</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(sales?.totals._sum.taxTotal ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(displaySales?.totals._sum.taxTotal ?? 0)}</div>
               </Card>
             </div>
             <Card>
@@ -395,7 +404,7 @@ export function Reports() {
                     <span>SALES</span>
                     <span>AMOUNT</span>
                   </div>
-                  {sales?.byPaymentMethod.map((row) => (
+                  {displaySales?.byPaymentMethod.map((row) => (
                     <div key={row.paymentMethod} className="grid grid-cols-[1.4fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
                       <span className="font-semibold text-brand-ink">{row.paymentMethod}</span>
                       <span className="text-brand-inkMuted">{row._count} sales</span>
@@ -414,7 +423,7 @@ export function Reports() {
                     <span>QTY SOLD</span>
                     <span>REVENUE</span>
                   </div>
-                  {sales?.topProducts.map((p) => (
+                  {displaySales?.topProducts.map((p) => (
                     <div key={p.productId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
                       <span className="font-semibold text-brand-ink">{p.name}</span>
                       <span className="text-brand-inkMuted">{p._sum.quantity ?? 0} sold</span>
@@ -432,13 +441,13 @@ export function Reports() {
             <div className="flex justify-end">
               <Button
                 variant="secondary"
-                disabled={!profit}
+                disabled={!displayProfit}
                 onClick={() =>
-                  profit &&
+                  displayProfit &&
                   downloadCsv(
                     "profit-by-product.csv",
                     ["Product", "Revenue (KSh)", "Cost (KSh)", "Profit (KSh)"],
-                    profit.byProduct.map((p) => [p.name, p.revenue, p.cost, p.profit])
+                    displayProfit.byProduct.map((p) => [p.name, p.revenue, p.cost, p.profit])
                   )
                 }
               >
@@ -448,15 +457,15 @@ export function Reports() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Revenue</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(profit?.revenue ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(displayProfit?.revenue ?? 0)}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Cost of Goods Sold</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(profit?.cogs ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(displayProfit?.cogs ?? 0)}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Gross Profit</div>
-                <div className="font-display text-2xl font-bold text-brand-accentText">{currencyFmt.format(profit?.grossProfit ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-accentText">{currencyFmt.format(displayProfit?.grossProfit ?? 0)}</div>
               </Card>
             </div>
             <Card>
@@ -468,7 +477,7 @@ export function Reports() {
                     <span>REVENUE</span>
                     <span>PROFIT</span>
                   </div>
-                  {profit?.byProduct
+                  {displayProfit?.byProduct
                     .sort((a, b) => b.profit - a.profit)
                     .map((p) => (
                       <div key={p.productId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
@@ -488,13 +497,13 @@ export function Reports() {
             <div className="flex justify-end">
               <Button
                 variant="secondary"
-                disabled={!inventory}
+                disabled={!displayInventory}
                 onClick={() =>
-                  inventory &&
+                  displayInventory &&
                   downloadCsv(
                     "inventory-valuation.csv",
                     ["Product", "SKU", "Stock Qty", "Unit Price (KSh)", "Value (KSh)"],
-                    inventory.products.map((p) => [p.name, p.sku, p.stockQty, Number(p.price), p.stockQty * Number(p.price)])
+                    displayInventory.products.map((p) => [p.name, p.sku, p.stockQty, Number(p.price), p.stockQty * Number(p.price)])
                   )
                 }
               >
@@ -504,19 +513,21 @@ export function Reports() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Products</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{inventory?.productCount ?? 0}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{displayInventory?.productCount ?? 0}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Units in stock</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{inventory?.totalUnits ?? 0}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{displayInventory?.totalUnits ?? 0}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Retail Value</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(inventory?.retailValue ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(displayInventory?.retailValue ?? 0)}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Potential Profit</div>
-                <div className="font-display text-2xl font-bold text-brand-accentText">{currencyFmt.format(inventory?.potentialProfit ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-accentText">
+                  {currencyFmt.format(displayInventory?.potentialProfit ?? 0)}
+                </div>
               </Card>
             </div>
             <Card>
@@ -528,7 +539,7 @@ export function Reports() {
                     <span>STOCK</span>
                     <span>VALUE</span>
                   </div>
-                  {inventory?.products.map((p) => (
+                  {displayInventory?.products.map((p) => (
                     <div key={p.id} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
                       <span className="font-semibold text-brand-ink">{p.name}</span>
                       <span className="text-brand-inkMuted">{p.stockQty} units</span>
@@ -546,18 +557,18 @@ export function Reports() {
             <div className="flex justify-end">
               <Button
                 variant="secondary"
-                disabled={!finance}
+                disabled={!displayFinance}
                 onClick={() =>
-                  finance &&
+                  displayFinance &&
                   downloadCsv(
                     "finance-summary.csv",
                     ["Line", "Amount (KSh)"],
                     [
-                      ["Sales Revenue", finance.revenue],
-                      ["Other Income", finance.otherIncome],
-                      ["Approved Expenses", finance.expenses],
-                      ["Net Cash Flow", finance.netCashFlow],
-                      ["Credit Outstanding", finance.creditOutstanding],
+                      ["Sales Revenue", displayFinance.revenue],
+                      ["Other Income", displayFinance.otherIncome],
+                      ["Approved Expenses", displayFinance.expenses],
+                      ["Net Cash Flow", displayFinance.netCashFlow],
+                      ["Credit Outstanding", displayFinance.creditOutstanding],
                     ]
                   )
                 }
@@ -568,23 +579,25 @@ export function Reports() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Sales Revenue</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(finance?.revenue ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(displayFinance?.revenue ?? 0)}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Other Income</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(finance?.otherIncome ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{currencyFmt.format(displayFinance?.otherIncome ?? 0)}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Approved Expenses</div>
-                <div className="font-display text-2xl font-bold text-brand-warn">{currencyFmt.format(finance?.expenses ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-warn">{currencyFmt.format(displayFinance?.expenses ?? 0)}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Net Cash Flow</div>
-                <div className="font-display text-2xl font-bold text-brand-accentText">{currencyFmt.format(finance?.netCashFlow ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-accentText">{currencyFmt.format(displayFinance?.netCashFlow ?? 0)}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Credit Outstanding</div>
-                <div className="font-display text-2xl font-bold text-brand-warn">{currencyFmt.format(finance?.creditOutstanding ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-warn">
+                  {currencyFmt.format(displayFinance?.creditOutstanding ?? 0)}
+                </div>
               </Card>
             </div>
           </>
@@ -595,13 +608,13 @@ export function Reports() {
             <div className="flex justify-end">
               <Button
                 variant="secondary"
-                disabled={!customers}
+                disabled={!displayCustomers}
                 onClick={() =>
-                  customers &&
+                  displayCustomers &&
                   downloadCsv(
                     "top-customers.csv",
                     ["Customer", "Orders", "Total Spent (KSh)"],
-                    customers.topCustomers.map((c) => [c.name, c.orderCount, c.totalSpent])
+                    displayCustomers.topCustomers.map((c) => [c.name, c.orderCount, c.totalSpent])
                   )
                 }
               >
@@ -611,16 +624,18 @@ export function Reports() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Total Customers</div>
-                <div className="font-display text-2xl font-bold text-brand-ink">{customers?.totalCustomers ?? 0}</div>
+                <div className="font-display text-2xl font-bold text-brand-ink">{displayCustomers?.totalCustomers ?? 0}</div>
               </Card>
               <Card>
                 <div className="text-[12.5px] font-semibold text-brand-inkMuted">Credit Outstanding</div>
-                <div className="font-display text-2xl font-bold text-brand-warn">{currencyFmt.format(customers?.creditOutstanding ?? 0)}</div>
+                <div className="font-display text-2xl font-bold text-brand-warn">
+                  {currencyFmt.format(displayCustomers?.creditOutstanding ?? 0)}
+                </div>
               </Card>
             </div>
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Top customers</div>
-              {customers && customers.topCustomers.length > 0 && (
+              {displayCustomers && displayCustomers.topCustomers.length > 0 && (
                 <div className="overflow-x-auto">
                   <div className="min-w-[420px]">
                     <div className="grid grid-cols-[2fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
@@ -628,7 +643,7 @@ export function Reports() {
                       <span>ORDERS</span>
                       <span>TOTAL SPENT</span>
                     </div>
-                    {customers.topCustomers.map((c) => (
+                    {displayCustomers.topCustomers.map((c) => (
                       <div key={c.customerId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
                         <span className="font-semibold text-brand-ink">{c.name}</span>
                         <span className="text-brand-inkMuted">{c.orderCount} orders</span>
@@ -638,7 +653,9 @@ export function Reports() {
                   </div>
                 </div>
               )}
-              {customers && customers.topCustomers.length === 0 && <div className="text-sm text-brand-inkMuted">No customer sales in this period.</div>}
+              {displayCustomers && displayCustomers.topCustomers.length === 0 && (
+                <div className="text-sm text-brand-inkMuted">No customer sales in this period.</div>
+              )}
             </Card>
           </>
         )}
@@ -684,13 +701,13 @@ export function Reports() {
             <div className="flex justify-end">
               <Button
                 variant="secondary"
-                disabled={!employees}
+                disabled={!displayEmployees}
                 onClick={() =>
-                  employees &&
+                  displayEmployees &&
                   downloadCsv(
                     "employee-performance.csv",
                     ["Employee", "Transactions", "Total Sales (KSh)"],
-                    employees.map((e) => [e.name, e.transactionCount, e.totalSales])
+                    displayEmployees.map((e) => [e.name, e.transactionCount, e.totalSales])
                   )
                 }
               >
@@ -699,7 +716,7 @@ export function Reports() {
             </div>
             <Card>
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Sales by employee</div>
-              {employees && employees.length > 0 && (
+              {displayEmployees && displayEmployees.length > 0 && (
                 <div className="overflow-x-auto">
                   <div className="min-w-[420px]">
                     <div className="grid grid-cols-[2fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
@@ -707,7 +724,7 @@ export function Reports() {
                       <span>SALES</span>
                       <span>TOTAL SALES</span>
                     </div>
-                    {employees.map((e) => (
+                    {displayEmployees.map((e) => (
                       <div key={e.cashierId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
                         <span className="font-semibold text-brand-ink">{e.name}</span>
                         <span className="text-brand-inkMuted">{e.transactionCount} sales</span>
@@ -717,7 +734,9 @@ export function Reports() {
                   </div>
                 </div>
               )}
-              {employees && employees.length === 0 && <div className="text-sm text-brand-inkMuted">No sales recorded in this period.</div>}
+              {displayEmployees && displayEmployees.length === 0 && (
+                <div className="text-sm text-brand-inkMuted">No sales recorded in this period.</div>
+              )}
             </Card>
           </>
         )}

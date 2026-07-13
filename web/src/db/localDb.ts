@@ -7,6 +7,7 @@ export interface CachedProduct {
   barcode: string | null;
   categoryName: string | null;
   price: number;
+  cost: number | null;
   stockQty: number;
   lowStockThreshold: number;
 }
@@ -35,6 +36,11 @@ export interface PendingSale {
   syncStatus: SyncStatus;
   syncError?: string;
   customerId?: string;
+  // Local-only — never sent to the server (which already knows the name via
+  // the customerId relation). Kept here purely so the offline stats overlay
+  // can show a customer's name in the Reports "Customers" tab before this
+  // sale has synced, without needing a second lookup.
+  customerName?: string;
   couponCode?: string;
   splitPayments?: SplitPaymentEntry[];
   // Only set for a standalone MPESA sale — proves the STK push for this

@@ -7,6 +7,7 @@ interface ServerProduct {
   sku: string;
   barcode: string | null;
   price: string | number;
+  cost: string | number | null;
   stockQty: number;
   lowStockThreshold: number;
   category: { name: string } | null;
@@ -15,7 +16,9 @@ interface ServerProduct {
 // Pulls the current catalog down so checkout can search/price products with
 // no connection. Called on login, whenever the app comes back online, and
 // periodically while online (see startBackgroundSync) so prices/stock/new
-// promotions don't go stale across a long open session.
+// promotions don't go stale across a long open session. `cost` is cached too
+// (unused by checkout itself) so the offline stats overlay can estimate COGS
+// for the Profit/P&L/Analytics reports without a network round trip.
 export async function refreshProductCache(): Promise<void> {
   const products = await api.get<ServerProduct[]>("/api/products");
   const cached: CachedProduct[] = products.map((p) => ({
@@ -25,6 +28,7 @@ export async function refreshProductCache(): Promise<void> {
     barcode: p.barcode,
     categoryName: p.category?.name ?? null,
     price: Number(p.price),
+    cost: p.cost != null ? Number(p.cost) : null,
     stockQty: p.stockQty,
     lowStockThreshold: p.lowStockThreshold,
   }));
@@ -39,6 +43,16 @@ export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncErro
   await localDb.pendingSales.put({ ...sale, syncStatus: "pending" });
   void flushPendingSales();
 }
+
+// Fired after a sync batch actually confirms at least one sale with the
+// server. Dashboard/Reports listen for this in addition to the browser's own
+// "online" event — "online" only means connectivity came back, not that any
+// pending sale has actually finished syncing yet. A report's own "online"
+// refetch can easily resolve *before* flushPendingSales' await chain (a
+// reachability check, then each sale POSTed sequentially) finishes, which
+// would otherwise cache a stale pre-sync number as if it were fresh, with no
+// further trigger to correct it until the next real connectivity change.
+export const SALES_SYNCED_EVENT = "pos:sales-synced";
 
 let flushing = false;
 
@@ -80,7 +94,10 @@ export async function flushPendingSales(): Promise<{ synced: number; failed: num
       }
     }
 
-    if (synced > 0) void refreshProductCache();
+    if (synced > 0) {
+      void refreshProductCache();
+      window.dispatchEvent(new Event(SALES_SYNCED_EVENT));
+    }
   } finally {
     flushing = false;
   }
