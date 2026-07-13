@@ -83,5 +83,7 @@ inventory).
 Checkout reads and writes against a local Dexie (IndexedDB) database first. Completed sales are queued
 locally with a client-generated `clientId` and pushed to the server when online; the server treats
 `clientId` as an idempotency key so a retried sync never double-books a sale or double-counts stock. The
-product catalog is cached locally on login and refreshed whenever the app comes back online. Full detail
-in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#offline-first--sync-architecture).
+product catalog is cached locally on login and refreshed whenever the app comes back online. Dashboard
+and Reports show this device's last-known figures while offline, with a clear banner, and refresh
+automatically the moment connectivity returns. Full detail in
+[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#offline-first--sync-architecture).

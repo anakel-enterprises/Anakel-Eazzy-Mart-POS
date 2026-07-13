@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { getCached } from "../lib/cachedFetch";
 import { downloadCsv } from "../lib/csv";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
@@ -163,6 +163,11 @@ export function Reports() {
   const [customers, setCustomers] = useState<CustomersReport | null>(null);
   const [suppliers, setSuppliers] = useState<SuppliersReport | null>(null);
   const [employees, setEmployees] = useState<EmployeeRow[] | null>(null);
+  // Shared across tabs since only one is visible at a time — reflects
+  // whichever tab's data is currently on screen.
+  const [stale, setStale] = useState(false);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   function rangeQuery() {
     const { from, to } = periodRange(period, customFrom, customTo);
@@ -173,37 +178,91 @@ export function Reports() {
     return qs ? `?${qs}` : "";
   }
 
+  // A date-ranged report's actual request URL embeds `to: now()`, which
+  // differs by a few milliseconds on every call — using that raw URL as the
+  // cache key would mean it never hits the entry it just wrote. The cache key
+  // instead identifies the report by which *period* is selected (stable
+  // across repeated visits to the same period), separate from the exact
+  // request URL sent over the wire.
+  function reportCacheKey(reportPath: string): string {
+    const periodKey = period === "Custom" ? `${customFrom || "open"}_${customTo || "open"}` : period;
+    return `${reportPath}::${periodKey}`;
+  }
+
+  // Tries the network first and falls back to this device's last successful
+  // response for this report+period when offline (see lib/cachedFetch.ts), so
+  // every report tab keeps showing its most recent figures instead of going
+  // blank.
+  async function loadReport<T>(path: string, cacheKey: string, setter: (data: T) => void, cancelledRef: { current: boolean }) {
+    try {
+      const res = await getCached<T>(path, cacheKey);
+      if (cancelledRef.current) return;
+      setter(res.data);
+      setStale(res.stale);
+      setCachedAt(res.cachedAt);
+      setLoadError(false);
+    } catch {
+      if (!cancelledRef.current) setLoadError(true);
+    }
+  }
+
   useEffect(() => {
     if (tab !== "P&L") return;
-    void api.get<ProfitLossReport>(`/api/reports/profit-loss${rangeQuery()}`).then(setProfitLoss);
-    void api.get<AnalyticsReport>(`/api/reports/analytics${rangeQuery()}`).then(setAnalytics);
+    const cancelledRef = { current: false };
+    const load = () => {
+      void loadReport(`/api/reports/profit-loss${rangeQuery()}`, reportCacheKey("/api/reports/profit-loss"), setProfitLoss, cancelledRef);
+      void loadReport(`/api/reports/analytics${rangeQuery()}`, reportCacheKey("/api/reports/analytics"), setAnalytics, cancelledRef);
+    };
+    load();
+    // Re-fetch the moment connectivity returns, so a report left open
+    // through an outage catches up without a manual refresh.
+    window.addEventListener("online", load);
+    return () => {
+      cancelledRef.current = true;
+      window.removeEventListener("online", load);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, period, customFrom, customTo]);
 
   useEffect(() => {
-    switch (tab) {
-      case "Sales":
-        void api.get<SalesSummary>(`/api/reports/sales-summary${rangeQuery()}`).then(setSales);
-        break;
-      case "Profit":
-        void api.get<ProfitReport>(`/api/reports/profit${rangeQuery()}`).then(setProfit);
-        break;
-      case "Inventory":
-        if (!inventory) void api.get<InventoryReport>("/api/reports/inventory").then(setInventory);
-        break;
-      case "Finance":
-        void api.get<FinanceReport>(`/api/reports/finance${rangeQuery()}`).then(setFinance);
-        break;
-      case "Customers":
-        void api.get<CustomersReport>(`/api/reports/customers${rangeQuery()}`).then(setCustomers);
-        break;
-      case "Suppliers":
-        if (!suppliers) void api.get<SuppliersReport>("/api/reports/suppliers").then(setSuppliers);
-        break;
-      case "Employees":
-        void api.get<EmployeeRow[]>(`/api/reports/employee-performance${rangeQuery()}`).then(setEmployees);
-        break;
-    }
+    if (tab === "P&L") return;
+    const cancelledRef = { current: false };
+    const load = () => {
+      switch (tab) {
+        case "Sales":
+          void loadReport(`/api/reports/sales-summary${rangeQuery()}`, reportCacheKey("/api/reports/sales-summary"), setSales, cancelledRef);
+          break;
+        case "Profit":
+          void loadReport(`/api/reports/profit${rangeQuery()}`, reportCacheKey("/api/reports/profit"), setProfit, cancelledRef);
+          break;
+        case "Inventory":
+          void loadReport("/api/reports/inventory", "/api/reports/inventory", setInventory, cancelledRef);
+          break;
+        case "Finance":
+          void loadReport(`/api/reports/finance${rangeQuery()}`, reportCacheKey("/api/reports/finance"), setFinance, cancelledRef);
+          break;
+        case "Customers":
+          void loadReport(`/api/reports/customers${rangeQuery()}`, reportCacheKey("/api/reports/customers"), setCustomers, cancelledRef);
+          break;
+        case "Suppliers":
+          void loadReport("/api/reports/suppliers", "/api/reports/suppliers", setSuppliers, cancelledRef);
+          break;
+        case "Employees":
+          void loadReport(
+            `/api/reports/employee-performance${rangeQuery()}`,
+            reportCacheKey("/api/reports/employee-performance"),
+            setEmployees,
+            cancelledRef
+          );
+          break;
+      }
+    };
+    load();
+    window.addEventListener("online", load);
+    return () => {
+      cancelledRef.current = true;
+      window.removeEventListener("online", load);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, period, customFrom, customTo]);
 
@@ -238,6 +297,18 @@ export function Reports() {
             </button>
           ))}
         </div>
+
+        {loadError && (
+          <div className="text-sm font-medium text-brand-warn">
+            Couldn't load this report — you're offline and no cached data is available on this device yet.
+          </div>
+        )}
+        {!loadError && stale && (
+          <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+            Offline — showing figures from {cachedAt ? new Date(cachedAt).toLocaleString("en-KE") : "the last time this device was online"}.
+            Will update automatically once you're back online.
+          </div>
+        )}
 
         {showDateRange && (
           <DateRangeControl

@@ -187,6 +187,7 @@ keeps working with no connectivity.
 | `products` | A flattened read-only mirror of the server's product catalog, used for offline search/pricing at checkout. Fully replaced (`clear()` + `bulkPut()`) on every refresh — no incremental diffing. |
 | `pendingSales` | The offline sale queue. Each row has a client-generated `clientId` (`${Date.now()}-${crypto.randomUUID()}`) — the same idempotency key `POST /api/sales` dedupes on — plus a `syncStatus` of `pending`/`synced`/`error`. |
 | `heldSales` | Purely local "pause and resume" cart holds, added in schema v2. These never touch the server at all — a cashier can hold and resume a cart with zero connectivity. This is a separate mechanism from the `Sale.status = HELD` value that exists in the database schema; the server-side HELD status currently has no endpoint that transitions it to COMPLETED, so in practice held/parked carts are handled entirely client-side today. |
+| `apiCache` | Added in schema v3. A generic last-known-good snapshot of read-only GET responses (Dashboard/Reports stats), keyed by a stable cache key per report+period — see [Offline statistics](#offline-statistics) below. |
 
 ### Sync engine (`web/src/lib/sync.ts`)
 
@@ -237,8 +238,57 @@ sequenceDiagram
 - The client-computed total shown mid-sale is explicitly an *estimate* — the server is authoritative
   and applies its own pricing tier, promotion, and coupon logic independently once the sale syncs
   (see [API.md](./API.md#post-apisales)).
-- Anything that isn't checkout (reports, employee management, supplier ledgers, etc.) has no offline
-  support — those pages call the API directly and simply fail if unreachable.
+- Dashboard and Reports show cached figures offline (see below); everything else (employee management,
+  supplier ledgers, settings, etc.) has no offline support — those pages call the API directly and
+  simply fail if unreachable.
+
+### Offline statistics
+
+Dashboard and every Reports tab use a shared cache-with-fallback helper (`web/src/lib/cachedFetch.ts`'s
+`getCached()`) instead of calling the API directly: try the network first, and on failure fall back to
+this device's own last successful response for that exact report, stored in the `apiCache` Dexie table.
+Every successful fetch overwrites its cache entry, so the fallback is always the most recent data this
+device has actually seen — not a fixed snapshot from first load.
+
+```mermaid
+sequenceDiagram
+    participant UI as Dashboard/Reports
+    participant Cache as getCached()
+    participant IDB as Dexie (apiCache)
+    participant API as Server
+
+    UI->>Cache: getCached("/api/reports/dashboard")
+    Cache->>API: GET (network)
+    alt reachable
+        API-->>Cache: 200 + data
+        Cache->>IDB: put(cacheKey, data, cachedAt)
+        Cache-->>UI: { data, stale: false }
+    else unreachable
+        Cache->>IDB: get(cacheKey)
+        IDB-->>Cache: last successful response, or none
+        Cache-->>UI: { data, stale: true } or throws (nothing cached yet)
+    end
+```
+
+Each page tracks `stale`/`cachedAt` alongside its data and shows an amber "Offline — showing figures
+from `<cachedAt>`. Will update automatically once you're back online." banner instead of the data going
+blank; a report that's never been successfully loaded on this device shows a plain error instead, since
+there's nothing to fall back to. Both pages also listen for the `window "online"` event while mounted
+and immediately re-fetch, so a screen left open through an outage catches up without a manual refresh
+(same pattern the sync engine above already uses).
+
+**Cache key vs. request URL**: for a date-ranged report, the live request always includes `to: now()`,
+which differs by milliseconds on every call — using that raw URL as the cache key would mean a report
+almost never actually hits the cache entry it just wrote. Reports.tsx instead derives a stable cache key
+per report from the *selected period* (`"Today"`, `"This Week"`, a custom date pair, …), independent of
+the exact request URL sent over the wire; `getCached(path, cacheKey)` accepts the two separately for
+exactly this reason. Dashboard and the non-date-ranged reports (Inventory, Suppliers) have no such
+mismatch — their path is already stable, so no separate cache key is needed.
+
+**What this doesn't do**: cached stats reflect whatever this specific device last saw, which may lag
+behind sales rung up on other tills while this one was offline — there's no cross-device merge, only
+"last successful fetch, per device." This mirrors the same single-device scope every other part of the
+offline layer already has (the product cache, the pending-sale queue).
 
 ## M-Pesa STK Push integration
 

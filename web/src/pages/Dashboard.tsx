@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { getCached } from "../lib/cachedFetch";
 import { Topbar } from "../components/Topbar";
 import { Card, StatCard } from "../components/ui";
 
@@ -24,13 +24,35 @@ const dayLabel = (iso: string) => new Date(iso).toLocaleDateString("en-KE", { we
 
 export function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [stale, setStale] = useState(false);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api
-      .get<DashboardData>("/api/reports/dashboard")
-      .then(setData)
-      .catch(() => setError("Couldn't load dashboard — showing cached view may be unavailable offline."));
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const res = await getCached<DashboardData>("/api/reports/dashboard");
+        if (cancelled) return;
+        setData(res.data);
+        setStale(res.stale);
+        setCachedAt(res.cachedAt);
+        setError(null);
+      } catch {
+        if (!cancelled) setError("Couldn't load the dashboard — you're offline and no cached data is available on this device yet.");
+      }
+    }
+
+    void load();
+    // Re-fetch the moment connectivity returns, so a dashboard left open
+    // through an outage catches up without needing a manual refresh.
+    const onOnline = () => void load();
+    window.addEventListener("online", onOnline);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("online", onOnline);
+    };
   }, []);
 
   const maxWeekly = data ? Math.max(...data.weeklySales.map((d) => d.total), 1) : 1;
@@ -43,6 +65,12 @@ export function Dashboard() {
       />
       <div className="flex flex-1 flex-col gap-6 overflow-auto p-4 sm:p-6 lg:p-8">
         {error && <div className="text-sm font-medium text-brand-warn">{error}</div>}
+        {!error && stale && (
+          <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+            Offline — showing figures from {cachedAt ? new Date(cachedAt).toLocaleString("en-KE") : "the last time this device was online"}.
+            Will update automatically once you're back online.
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           <StatCard label="Today's Sales" value={data ? currencyFmt.format(data.todaysSalesTotal) : "—"} delta="Updated live" />

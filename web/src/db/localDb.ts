@@ -51,10 +51,23 @@ export interface HeldSale {
   createdAt: string;
 }
 
+// Last-known-good snapshot of a read-only GET response (dashboard/report
+// stats), keyed by the exact request path including its query string —
+// e.g. "/api/reports/finance?from=...&to=...". Lets Dashboard/Reports show
+// something meaningful offline instead of an empty state, and is what
+// distinguishes "no data yet" from "here's what we had last time we could
+// reach the server."
+export interface CachedApiResponse {
+  url: string;
+  data: unknown;
+  cachedAt: string;
+}
+
 class LocalDb extends Dexie {
   products!: Table<CachedProduct, string>;
   pendingSales!: Table<PendingSale, string>;
   heldSales!: Table<HeldSale, string>;
+  apiCache!: Table<CachedApiResponse, string>;
 
   constructor() {
     super("anakel-pos");
@@ -66,6 +79,12 @@ class LocalDb extends Dexie {
       products: "id, name, sku, barcode",
       pendingSales: "clientId, syncStatus, createdAt",
       heldSales: "id, createdAt",
+    });
+    this.version(3).stores({
+      products: "id, name, sku, barcode",
+      pendingSales: "clientId, syncStatus, createdAt",
+      heldSales: "id, createdAt",
+      apiCache: "url",
     });
   }
 }
