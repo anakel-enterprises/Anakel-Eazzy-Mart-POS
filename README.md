@@ -1,38 +1,53 @@
 # Anakel Eazzy Mart POS
 
-Point of Sale for Anakel Eazzy Mart — a Kenyan minimart. Built as an
-installable PWA so checkout keeps working when the internet drops, syncing
-queued sales back to the server once the connection returns.
+Point of Sale for Anakel Eazzy Mart — a Kenyan minimart. Built as an installable PWA so checkout keeps
+working when the internet drops, syncing queued sales back to the server once the connection returns.
+
+## Documentation
+
+| Doc | Covers |
+|---|---|
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | System design, request pipeline, auth, offline/sync engine, PWA config, design system, known gaps |
+| [docs/API.md](./docs/API.md) | Full REST API reference — every endpoint, request/response shape, business rules |
+| [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | Prisma schema reference, ERD, foreign key behavior, migration history |
+| [docs/PERMISSIONS.md](./docs/PERMISSIONS.md) | Roles, the permission catalog, per-role defaults, how enforcement works |
+| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Environment variables, Vercel topology, migrations on deploy, rollback |
+| [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) | Local setup, conventions, branch workflow, how to verify a change |
+
+Start with **ARCHITECTURE.md** for the big picture, then **API.md**/**DATA_MODEL.md** as references
+while you work.
 
 ## Stack
 
-- **Backend:** Node.js, Express, PostgreSQL, Prisma
-- **Frontend:** React (Vite), TypeScript, Tailwind CSS, Dexie (IndexedDB) for
-  the offline sales queue, vite-plugin-pwa for installability
-- **Design:** "Fresh Grocer" direction — dark green sidebar, soft rounded
-  white cards, Inter/Space Grotesk type
+- **Backend:** Node.js, Express, PostgreSQL, Prisma, Zod, JWT auth — deployed as a Vercel serverless
+  function
+- **Frontend:** React (Vite), TypeScript, Tailwind CSS, Dexie (IndexedDB) for the offline sales queue,
+  vite-plugin-pwa for installability — deployed as a static Vercel site
+- **Design:** "Fresh Grocer" direction — dark green sidebar, soft rounded white cards, Inter/Space
+  Grotesk type
 
 ## Project layout
 
 ```
 server/   Express API + Prisma schema/migrations
 web/      React PWA frontend
+docs/     Architecture, API, data model, permissions, deployment, and contributing reference
 ```
 
-Every business table in the Prisma schema carries a `storeId`, even though
-Phase 1 only ever runs a single store — this keeps a future multi-store
-rollout a config change instead of a data migration.
+Every business table in the Prisma schema carries a `storeId`, even though the product only ever runs a
+single store today — this keeps a future multi-store rollout a config change instead of a data
+migration.
 
-## Getting started
+## Quick start
 
-Requires Node 20+ and a PostgreSQL server.
+Requires Node 20+ and a running PostgreSQL server.
 
 ```bash
 npm install
 
 # Backend
-cp server/.env.example server/.env   # edit DATABASE_URL / JWT_SECRET
-createdb anakel_pos                  # or update DATABASE_URL to an existing db
+cp server/.env.example server/.env   # edit DATABASE_URL / DIRECT_URL / JWT_SECRET
+createdb anakel_pos                  # or point DATABASE_URL at an existing db
 npm run db:migrate --workspace server
 npm run db:seed --workspace server
 
@@ -50,21 +65,23 @@ Seeded accounts (see `server/prisma/seed.ts`):
 - Admin — `admin@eazzymart.co.ke` / `admin123`
 - Cashier — `cashier@eazzymart.co.ke` / `cashier123`
 
-## Phase 1 (MVP) scope
+Full setup detail, environment variables, and production deployment: see
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
 
-Dashboard, Checkout/POS (cash + M-Pesa + card/bank/credit), Inventory,
-Categories, Cash Register (open/close + reconciliation), basic Reports,
-Employees & Roles (Admin/Cashier), Settings.
+## What's built
 
-Deferred to later phases: Suppliers, Purchase Orders, Customers/Credit Sales,
-Loyalty, Promotions, Returns, Multi-store, Notifications, Audit Trail,
-Analytics, Backup, AI features.
+Checkout/POS (cash, M-Pesa, card, bank, split, and credit payment, with tiered pricing, promotions, and
+coupon codes), Inventory (with CSV import and barcode label printing), Cash Register (open/close +
+reconciliation), Suppliers & purchase ledgers, Customers & credit sales, Expenses & Income (with an
+approval workflow), Promotions & Coupons, an 8-tab Reports suite (P&L, sales, profit, inventory,
+finance, customers, suppliers, employee performance), Employees with per-employee role + fine-grained
+permission overrides, and Settings (including an admin-gated full data reset for going live with fresh
+inventory).
 
 ## Offline behavior
 
-Checkout reads and writes against a local Dexie (IndexedDB) database first.
-Completed sales are queued locally with a client-generated `clientId` and
-pushed to the server when online; the server treats `clientId` as an
-idempotency key so a retried sync never double-books a sale or double-counts
-stock. The product catalog is cached locally on login and refreshed whenever
-the app comes back online.
+Checkout reads and writes against a local Dexie (IndexedDB) database first. Completed sales are queued
+locally with a client-generated `clientId` and pushed to the server when online; the server treats
+`clientId` as an idempotency key so a retried sync never double-books a sale or double-counts stock. The
+product catalog is cached locally on login and refreshed whenever the app comes back online. Full detail
+in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#offline-first--sync-architecture).
