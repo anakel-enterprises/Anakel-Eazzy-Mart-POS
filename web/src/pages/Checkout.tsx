@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb, newClientId, type CachedProduct, type SplitPaymentEntry } from "../db/localDb";
 import { queueSale, refreshProductCache } from "../lib/sync";
-import { api, isApiReachable } from "../lib/api";
+import { api, ApiError, isApiReachable } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 
@@ -26,6 +26,12 @@ interface CustomerOption {
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
 const PAYMENT_METHODS = ["CASH", "MPESA", "CARD", "BANK", "SPLIT", "CREDIT"] as const;
 const SPLIT_METHODS = ["CASH", "MPESA", "CARD", "BANK"] as const;
+type MpesaStatus = "idle" | "sending" | "waiting" | "success" | "failed";
+// Safaricom's own STK prompt expires client-side after roughly a minute if
+// the customer never responds — poll a bit past that so a slow-but-real
+// approval isn't cut off right before it would have landed.
+const MPESA_POLL_INTERVAL_MS = 3000;
+const MPESA_POLL_TIMEOUT_MS = 90_000;
 
 export function Checkout() {
   const [query, setQuery] = useState("");
@@ -43,6 +49,10 @@ export function Checkout() {
   const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [showHeld, setShowHeld] = useState(false);
+  const [mpesaPhone, setMpesaPhone] = useState("");
+  const [mpesaStatus, setMpesaStatus] = useState<MpesaStatus>("idle");
+  const [mpesaError, setMpesaError] = useState<string | null>(null);
+  const [mpesaReceiptNumber, setMpesaReceiptNumber] = useState<string | null>(null);
 
   useEffect(() => {
     void isApiReachable().then((reachable) => {
@@ -116,6 +126,10 @@ export function Checkout() {
       { method: "CASH", amount: 0 },
       { method: "MPESA", amount: 0 },
     ]);
+    setMpesaPhone("");
+    setMpesaStatus("idle");
+    setMpesaError(null);
+    setMpesaReceiptNumber(null);
   }
 
   async function holdSale() {
@@ -152,7 +166,7 @@ export function Checkout() {
     await localDb.heldSales.delete(id);
   }
 
-  async function completeSale() {
+  async function completeSale(mpesaCheckoutRequestId?: string) {
     if (cart.length === 0) return;
     if (paymentMethod === "CREDIT" && !customer) return;
     if (paymentMethod === "SPLIT" && splitRemaining > 0.01) return;
@@ -168,6 +182,7 @@ export function Checkout() {
       customerId: customer?.id,
       couponCode: couponCode.trim() || undefined,
       splitPayments: paymentMethod === "SPLIT" ? splitRows.filter((r) => r.amount > 0) : undefined,
+      mpesaCheckoutRequestId,
     });
 
     await localDb.transaction("rw", localDb.products, async () => {
@@ -178,6 +193,58 @@ export function Checkout() {
     });
     setReceipt({ total, change: changeDue });
     resetPaymentState();
+  }
+
+  // Live M-Pesa checkout has no offline path — the STK push itself needs
+  // connectivity — so this runs as one linear online request/poll loop
+  // rather than going through the offline sale queue until it succeeds.
+  async function sendMpesaPush() {
+    if (!mpesaPhone.trim() || cart.length === 0) return;
+    setMpesaStatus("sending");
+    setMpesaError(null);
+    setMpesaReceiptNumber(null);
+
+    let checkoutRequestId: string;
+    try {
+      const res = await api.post<{ checkoutRequestId: string }>("/api/mpesa/stk-push", {
+        phone: mpesaPhone.trim(),
+        amount: total,
+      });
+      checkoutRequestId = res.checkoutRequestId;
+    } catch (err) {
+      setMpesaError(err instanceof ApiError ? err.message : "Couldn't reach M-Pesa — check your connection");
+      setMpesaStatus("failed");
+      return;
+    }
+
+    setMpesaStatus("waiting");
+    const deadline = Date.now() + MPESA_POLL_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, MPESA_POLL_INTERVAL_MS));
+      try {
+        const status = await api.get<{ status: string; mpesaReceiptNumber: string | null; resultDesc: string | null }>(
+          `/api/mpesa/stk-push/${checkoutRequestId}`
+        );
+        if (status.status === "SUCCESS") {
+          setMpesaReceiptNumber(status.mpesaReceiptNumber);
+          setMpesaStatus("success");
+          await completeSale(checkoutRequestId);
+          return;
+        }
+        if (status.status === "FAILED" || status.status === "CANCELLED") {
+          setMpesaError(status.resultDesc || "The customer didn't complete the payment.");
+          setMpesaStatus("failed");
+          return;
+        }
+        // still PENDING — keep polling until the deadline
+      } catch {
+        // transient error while polling; keep trying until the deadline
+      }
+    }
+
+    setMpesaError("No response from the customer's phone — try again.");
+    setMpesaStatus("failed");
   }
 
   function handleScan(value: string) {
@@ -294,6 +361,51 @@ export function Checkout() {
                 className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
               />
             </label>
+          )}
+
+          {paymentMethod === "MPESA" && (
+            <div className="text-sm">
+              <span className="mb-1 block font-medium text-brand-ink">Customer's phone number</span>
+              <input
+                type="tel"
+                value={mpesaPhone}
+                onChange={(e) => setMpesaPhone(e.target.value)}
+                placeholder="07XX XXX XXX"
+                disabled={mpesaStatus === "sending" || mpesaStatus === "waiting"}
+                className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep disabled:bg-brand-bg"
+              />
+
+              {mpesaStatus === "idle" && (
+                <Button
+                  variant="secondary"
+                  className="mt-2 w-full"
+                  onClick={() => void sendMpesaPush()}
+                  disabled={!mpesaPhone.trim() || cart.length === 0}
+                >
+                  Send M-Pesa request
+                </Button>
+              )}
+              {mpesaStatus === "sending" && <p className="mt-2 text-xs text-brand-inkMuted">Sending request…</p>}
+              {mpesaStatus === "waiting" && (
+                <div className="mt-2 flex items-center gap-2 rounded-lg bg-brand-bg px-3 py-2 text-xs font-semibold text-brand-ink">
+                  <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-brand-accentDeep" />
+                  Waiting for the customer to enter their M-Pesa PIN…
+                </div>
+              )}
+              {mpesaStatus === "success" && (
+                <div className="mt-2 rounded-lg bg-brand-bg px-3 py-2 text-xs font-semibold text-brand-accentText">
+                  Payment received{mpesaReceiptNumber ? ` — ${mpesaReceiptNumber}` : ""}
+                </div>
+              )}
+              {mpesaStatus === "failed" && (
+                <div className="mt-2 flex flex-col gap-2">
+                  <div className="text-xs font-semibold text-brand-warn">{mpesaError ?? "Payment failed"}</div>
+                  <Button variant="secondary" onClick={() => setMpesaStatus("idle")}>
+                    Try again
+                  </Button>
+                </div>
+              )}
+            </div>
           )}
 
           {paymentMethod === "SPLIT" && (
@@ -414,20 +526,27 @@ export function Checkout() {
           </div>
 
           <div className="flex gap-3">
-            <Button variant="secondary" className="flex-1" onClick={() => void holdSale()} disabled={cart.length === 0}>
+            <Button
+              variant="secondary"
+              className="flex-1"
+              onClick={() => void holdSale()}
+              disabled={cart.length === 0 || mpesaStatus === "sending" || mpesaStatus === "waiting"}
+            >
               Hold sale
             </Button>
-            <Button
-              className="flex-1"
-              onClick={() => void completeSale()}
-              disabled={
-                cart.length === 0 ||
-                (paymentMethod === "CREDIT" && !customer) ||
-                (paymentMethod === "SPLIT" && splitRemaining > 0.01)
-              }
-            >
-              Complete sale
-            </Button>
+            {paymentMethod !== "MPESA" && (
+              <Button
+                className="flex-1"
+                onClick={() => void completeSale()}
+                disabled={
+                  cart.length === 0 ||
+                  (paymentMethod === "CREDIT" && !customer) ||
+                  (paymentMethod === "SPLIT" && splitRemaining > 0.01)
+                }
+              >
+                Complete sale
+              </Button>
+            )}
           </div>
         </Card>
       </div>

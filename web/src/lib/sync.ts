@@ -69,6 +69,7 @@ export async function flushPendingSales(): Promise<{ synced: number; failed: num
           customerId: sale.customerId,
           couponCode: sale.couponCode,
           splitPayments: sale.splitPayments,
+          mpesaCheckoutRequestId: sale.mpesaCheckoutRequestId,
         });
         await localDb.pendingSales.update(sale.clientId, { syncStatus: "synced" });
         synced++;

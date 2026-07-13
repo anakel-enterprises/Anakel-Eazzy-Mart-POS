@@ -13,6 +13,7 @@ interface Store {
 const RESET_CONFIRM_PHRASE = "DELETE";
 
 interface ResetResult {
+  mpesaTransactions: number;
   sales: number;
   stockAdjustments: number;
   registerSessions: number;

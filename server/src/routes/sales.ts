@@ -29,6 +29,11 @@ const createSaleSchema = z.object({
   couponCode: z.string().optional(),
   creditDueDate: z.string().datetime().optional(),
   splitPayments: z.array(splitPaymentSchema).optional(),
+  // Required for a standalone MPESA sale — proves a real STK push actually
+  // succeeded for this amount before the sale is allowed to complete. Not
+  // used for SPLIT's MPESA leg, which (like its other legs) is just a
+  // cashier-asserted amount, same as CASH/CARD/BANK in a split.
+  mpesaCheckoutRequestId: z.string().optional(),
 });
 
 const ROUNDING_TOLERANCE = 0.01;
@@ -193,6 +198,37 @@ salesRouter.post(
       }
     }
 
+    // A standalone MPESA sale must point at an STK push that Safaricom's
+    // callback has already confirmed SUCCESS for this exact store, not yet
+    // consumed by another sale, and covering the total — same shortfall
+    // tolerance as split payments, since the push amount is quoted before
+    // any promotion/coupon this request applies is known.
+    let mpesaTransaction = null;
+    if (data.paymentMethod === "MPESA" && data.status === "COMPLETED") {
+      if (!data.mpesaCheckoutRequestId) {
+        res.status(400).json({ error: "Missing M-Pesa checkout request" });
+        return;
+      }
+      mpesaTransaction = await prisma.mpesaTransaction.findFirst({
+        where: { checkoutRequestId: data.mpesaCheckoutRequestId, storeId: req.auth!.storeId },
+      });
+      if (!mpesaTransaction || mpesaTransaction.status !== "SUCCESS") {
+        res.status(400).json({ error: "M-Pesa payment has not been confirmed yet" });
+        return;
+      }
+      if (mpesaTransaction.saleId) {
+        res.status(400).json({ error: "This M-Pesa payment has already been used for another sale" });
+        return;
+      }
+      if (Number(mpesaTransaction.amount) - Number(total) < -ROUNDING_TOLERANCE) {
+        res.status(400).json({
+          error: `The M-Pesa payment (${mpesaTransaction.amount.toFixed(2)}) doesn't cover the total (${total.toFixed(2)})`,
+          total: total.toFixed(2),
+        });
+        return;
+      }
+    }
+
     const creditDueDate =
       data.paymentMethod === "CREDIT"
         ? data.creditDueDate
@@ -218,6 +254,7 @@ salesRouter.post(
           changeDue: changeDue ?? undefined,
           paymentMethod: data.paymentMethod,
           creditDueDate,
+          mpesaReceiptNumber: mpesaTransaction?.mpesaReceiptNumber,
           createdAt: data.createdAt ? new Date(data.createdAt) : undefined,
           items: { create: lineItems },
           splitPayments:
@@ -242,6 +279,12 @@ salesRouter.post(
           await tx.customer.update({
             where: { id: customer.id },
             data: { creditBalance: { increment: total } },
+          });
+        }
+        if (mpesaTransaction) {
+          await tx.mpesaTransaction.update({
+            where: { id: mpesaTransaction.id },
+            data: { saleId: created.id },
           });
         }
       }

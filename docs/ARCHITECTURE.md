@@ -240,6 +240,83 @@ sequenceDiagram
 - Anything that isn't checkout (reports, employee management, supplier ledgers, etc.) has no offline
   support — those pages call the API directly and simply fail if unreachable.
 
+## M-Pesa STK Push integration
+
+A standalone `MPESA` sale at checkout is backed by a real Safaricom Daraja "Lipa na M-Pesa Online" (STK
+Push) integration, not just a payment-method label. This is the one part of checkout that has **no
+offline path** — sending a PIN prompt to a customer's phone inherently requires connectivity — so it's
+built as a linear online request/poll flow rather than going through the Dexie offline sale queue until
+the payment is confirmed.
+
+```mermaid
+sequenceDiagram
+    participant Cashier
+    participant UI as Checkout UI
+    participant API as Server
+    participant Safaricom
+    participant Customer as Customer's phone
+
+    Cashier->>UI: Enter phone, "Send M-Pesa request"
+    UI->>API: POST /api/mpesa/stk-push { phone, amount }
+    API->>Safaricom: OAuth token + STK push request
+    Safaricom-->>API: 200 Accepted (CheckoutRequestID)
+    API->>API: create MpesaTransaction (PENDING)
+    API-->>UI: { checkoutRequestId }
+    Safaricom->>Customer: PIN prompt
+    loop poll every 3s, up to 90s
+        UI->>API: GET /api/mpesa/stk-push/:checkoutRequestId
+        API-->>UI: { status: PENDING }
+    end
+    Customer->>Safaricom: Enters PIN (approves)
+    Safaricom->>API: POST /api/mpesa/callback (public, unauthenticated)
+    API->>API: MpesaTransaction → SUCCESS, mpesaReceiptNumber set
+    UI->>API: GET /api/mpesa/stk-push/:checkoutRequestId
+    API-->>UI: { status: SUCCESS, mpesaReceiptNumber }
+    UI->>API: POST /api/sales { paymentMethod: MPESA, mpesaCheckoutRequestId }
+    API->>API: verify transaction SUCCESS, unconsumed, covers total
+    API-->>UI: 201 Sale created (mpesaReceiptNumber copied onto it)
+```
+
+**Server side** (`server/src/lib/mpesa.ts`, `server/src/routes/mpesa.ts`): `initiateStkPush()` handles
+Daraja's OAuth dance (a Basic-auth token request, cached in memory until near expiry) and the actual STK
+push call, with the customer's phone normalized from whatever format a cashier types (`07XX`, `01XX`,
+`+254`, `254`) into the `2547XXXXXXXX`/`2541XXXXXXXX` form Daraja requires. `POST /api/mpesa/stk-push`
+creates a `PENDING` `MpesaTransaction` row the moment Safaricom accepts the push — this is the audit
+trail /state machine for the payment, independent of whether a `Sale` ever gets created from it.
+`POST /api/mpesa/callback` is the one route in this codebase mounted **without** `requireAuth` — it's
+Safaricom's own servers calling in, which can't attach a JWT. The unguessable `checkoutRequestId`
+Safaricom itself generated is what scopes the callback to the right pending transaction; there's no
+additional signature or IP-allowlist verification layered on top (see
+[Known gaps](#known-gaps--deferred-work)). The callback always acks with Safaricom's expected
+`{ ResultCode: 0, ResultDesc: "Accepted" }` body regardless of outcome — including for an unrecognized
+or already-resolved `checkoutRequestId` — since responding with anything else risks Safaricom treating
+delivery as failed and retrying indefinitely.
+
+**Payment verification, not just a label**: `POST /api/sales` requires a standalone `MPESA` sale to
+carry a `mpesaCheckoutRequestId` pointing at a transaction that is `SUCCESS`, not already linked to
+another sale, and whose amount covers the computed total — the same shortfall-tolerance pattern used for
+split payments, since the push amount is quoted before this request's promotions/coupon are applied. On
+success the transaction is linked to the new sale (`MpesaTransaction.saleId`, unique — this is what
+actually prevents the same STK push being spent on two sales) and its receipt number is copied onto
+`Sale.mpesaReceiptNumber`. `SPLIT`'s MPESA leg is deliberately **not** run through any of this — like its
+other legs (CASH/CARD/BANK), it's just a cashier-asserted amount, consistent with how the rest of split
+payment already works; only a standalone MPESA sale gets real STK verification.
+
+**Frontend** (`web/src/pages/Checkout.tsx`): selecting MPESA replaces the normal "Complete sale" button
+with a phone-number field and a "Send M-Pesa request" button. `sendMpesaPush()` is a single async
+function — POST the push, then poll `GET /api/mpesa/stk-push/:checkoutRequestId` every 3 seconds for up
+to 90 seconds — showing "Waiting for the customer to enter their M-Pesa PIN…" while pending. On
+`SUCCESS` it calls the same `completeSale()` used by every other payment method (passing the
+`checkoutRequestId` through), which queues the sale via the normal offline-sync path — at that point
+connectivity is known-good, so it syncs essentially immediately. On `FAILED`/`CANCELLED`/timeout, the
+cashier sees why and can retry or switch payment methods.
+
+**Sandbox vs. production**: `MPESA_ENV` selects Safaricom's sandbox or production API base URL.
+`MPESA_SHORTCODE`/`MPESA_PASSKEY` default to Safaricom's published sandbox test values (shortcode
+`174379`), so the whole pipeline is testable against the sandbox the moment you register a free Daraja
+app for `MPESA_CONSUMER_KEY`/`MPESA_CONSUMER_SECRET` — no code changes are needed to go to production,
+only different env var values. See [DEPLOYMENT.md](./DEPLOYMENT.md#m-pesa-daraja-setup).
+
 ## PWA / service worker
 
 Configured via `vite-plugin-pwa` in `web/vite.config.ts`, `generateSW` mode with `registerType:
@@ -275,3 +352,11 @@ does:
 - **`Store.taxRate` is unused** — `Sale.taxTotal` is hardcoded to `0`.
 - **Multi-store is schema-ready but not implemented** — every table has `storeId`, but there is
   currently exactly one `Store` row and nothing in auth/routing selects between multiple stores.
+- **`POST /api/mpesa/callback` has no signature/IP verification.** It's protected only by the
+  unguessable `checkoutRequestId` Safaricom itself generates — there's no shared-secret header check or
+  IP allowlist against Safaricom's published callback source ranges. Acceptable given the rest of this
+  API's current security posture (no rate limiting either), but worth revisiting before handling
+  meaningfully larger transaction volumes.
+- **No STK push cancel/reversal endpoint.** If a cashier abandons a push after sending it (customer
+  walked away, wrong amount), the `MpesaTransaction` just sits `PENDING` until it naturally times out or
+  the customer declines — there's no way to proactively cancel it server-side.

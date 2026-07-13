@@ -54,6 +54,7 @@ erDiagram
     Sale }o--o| CashRegisterSession : "rung under"
     Sale }o--o| Customer : "billed to"
     Sale }o--o| Coupon : "discounted by"
+    Sale |o--o| MpesaTransaction : "paid via"
 
     Customer ||--o{ CreditPayment : makes
 
@@ -130,6 +131,7 @@ erDiagram
 | `SaleStatus` | `HELD`, `COMPLETED`, `VOIDED`, `REFUNDED` — note: `VOIDED`/`REFUNDED` exist in the schema but no route currently sets them; there is no void/refund endpoint yet. |
 | `RegisterSessionStatus` | `OPEN`, `CLOSED` |
 | `StockAdjustmentReason` | `RECEIVED_STOCK`, `DAMAGE`, `THEFT_LOSS`, `RECOUNT`, `MANUAL_CORRECTION` |
+| `MpesaTransactionStatus` | `PENDING`, `SUCCESS`, `FAILED`, `CANCELLED` |
 
 ## Tables
 
@@ -220,6 +222,7 @@ The checkout record. One row per transaction (cash sale, credit sale, or held ca
 | `changeDue` | Decimal(12,2)? | |
 | `paymentMethod` | PaymentMethod | default `CASH` |
 | `creditDueDate` | DateTime? | only for `CREDIT` sales |
+| `mpesaReceiptNumber` | String? | copied from the linked `MpesaTransaction` once its STK push succeeds, for a join-free receipt/report lookup |
 | `createdAt` | DateTime | can be backdated by the client on offline sync so held-then-synced sales keep their real timestamp |
 | `updatedAt` / `syncedAt` | DateTime | |
 
@@ -254,6 +257,30 @@ Only populated when `Sale.paymentMethod === SPLIT` — the per-method breakdown 
 | `amount` | Decimal(12,2) | |
 
 Index: `[saleId]`.
+
+### MpesaTransaction
+
+One row per Safaricom STK Push request — the state machine for a live M-Pesa payment, from the moment
+the push is sent through to the customer's phone until Safaricom's callback reports the outcome. See
+[ARCHITECTURE.md](./ARCHITECTURE.md#m-pesa-stk-push-integration) for the full flow.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | String (cuid) | PK |
+| `storeId` | String | FK → `Store.id`, RESTRICT |
+| `cashierId` | String | FK → `User.id`, RESTRICT — who initiated the push |
+| `phone` | String | normalized Kenyan MSISDN (`2547XXXXXXXX`/`2541XXXXXXXX`) |
+| `amount` | Decimal(12,2) | the amount quoted in the push |
+| `merchantRequestId` | String | Safaricom's own request id |
+| `checkoutRequestId` | String | **unique** — the token both the status-poll and callback routes look this row up by |
+| `status` | MpesaTransactionStatus | default `PENDING` |
+| `resultCode` | Int? | Safaricom's numeric result code, set once resolved |
+| `resultDesc` | String? | Safaricom's human-readable result description |
+| `mpesaReceiptNumber` | String? | set on `SUCCESS` only |
+| `saleId` | String? | FK → `Sale.id`, **SET NULL** — **unique**; set once a `Sale` is created from this transaction, so it can't be reused for a second sale |
+| `createdAt` / `updatedAt` | DateTime | |
+
+Index: `[storeId]`.
 
 ### CashRegisterSession
 
@@ -462,11 +489,14 @@ Confirmed against the generated migration SQL, not just the Prisma schema annota
 | `Expense.categoryId → ExpenseCategory.id` | RESTRICT |
 | `Expense.requestedById → User.id` | RESTRICT |
 | `Expense.approvedById → User.id` | SET NULL |
+| `MpesaTransaction.storeId → Store.id` | RESTRICT |
+| `MpesaTransaction.cashierId → User.id` | RESTRICT |
+| `MpesaTransaction.saleId → Sale.id` | SET NULL |
 
 All foreign keys use `ON UPDATE CASCADE`. Only `Sale`/`SaleItem`/`SalePayment` cascade-delete anything —
 which is exactly why [`POST /api/settings/reset-data`](./API.md#post-apisettingsreset-data) deletes
-`Sale` rows first: every RESTRICT-guarded table downstream of a sale (customers, products, register
-sessions, etc.) can't be cleared until the sales referencing them are gone.
+`MpesaTransaction` and `Sale` rows first: every RESTRICT-guarded table downstream of a sale (customers,
+products, register sessions, etc.) can't be cleared until the sales referencing them are gone.
 
 ## Migration history
 
@@ -476,6 +506,7 @@ sessions, etc.) can't be cleared until the sales referencing them are gone.
 | `20260707202143_phase2_suppliers_credit_expenses_promotions` | `Customer`, `CreditPayment`, `Supplier`, `SupplierTransaction`, `ExpenseCategory`, `Expense`, `Income`, `Promotion`, `Coupon`, plus `Sale.customerId` / `Sale.couponId` |
 | `20260708101518_split_payments` | `SalePayment` |
 | `20260709071239_add_user_permissions` | `User.permissions` (JSONB) |
+| `20260713113021_add_mpesa_transactions` | `MpesaTransaction`, `MpesaTransactionStatus`, plus `Sale.mpesaReceiptNumber` |
 
 Run `npm run db:migrate --workspace server` to apply pending migrations locally (creates a new one if
 the schema has diverged); `prisma migrate deploy` (run automatically by the `vercel-build` script) to

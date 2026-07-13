@@ -37,6 +37,9 @@ export interface PendingSale {
   customerId?: string;
   couponCode?: string;
   splitPayments?: SplitPaymentEntry[];
+  // Only set for a standalone MPESA sale — proves the STK push for this
+  // amount already succeeded before the sale is allowed to complete.
+  mpesaCheckoutRequestId?: string;
 }
 
 // Held sales never touch the server — a "hold" is a local pause-and-resume on

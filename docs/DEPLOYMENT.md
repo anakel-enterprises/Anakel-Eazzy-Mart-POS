@@ -23,6 +23,12 @@ Both are configured to auto-deploy from the `main` branch.
 | `DIRECT_URL` | yes (required by Prisma) | — | Non-pooled Postgres connection string, used only by `prisma migrate`. On a plain Postgres instance with no connection pooler in front of it, this can be the same value as `DATABASE_URL`. On Vercel Postgres/Neon, use the pooled URL for `DATABASE_URL` and the direct one here. |
 | `PORT` | no | `4000` | Only relevant to the local/traditional-server entrypoint (`src/index.ts`); irrelevant on Vercel, where `api/index.ts` is the actual entry. |
 | `CORS_ORIGIN` | no | `http://localhost:5173` | Comma-separated list of allowed web origins, passed straight to the `cors` middleware. Add the deployed web app's URL (and any Vercel preview URLs you want to allow) here in production. |
+| `MPESA_CONSUMER_KEY` | no — but the STK push endpoint 503s without it | — | From your Safaricom Daraja app. See [M-Pesa (Daraja) setup](#m-pesa-daraja-setup). |
+| `MPESA_CONSUMER_SECRET` | no — but the STK push endpoint 503s without it | — | From your Safaricom Daraja app. |
+| `MPESA_SHORTCODE` | no | `174379` (Safaricom's published sandbox test shortcode) | The Paybill/Till number STK push charges against. Set to your real Paybill/Till when moving to production. |
+| `MPESA_PASSKEY` | no | Safaricom's published sandbox test passkey | Pairs with `MPESA_SHORTCODE` to sign the STK push request. Get your production passkey from the Daraja portal alongside your production shortcode. |
+| `MPESA_ENV` | no | `sandbox` | `sandbox` or `production` — selects Safaricom's API base URL. |
+| `MPESA_CALLBACK_URL` | no — but the STK push endpoint 503s without it | — | A **public HTTPS URL** Safaricom can reach — your deployed API's `<api-url>/api/mpesa/callback`. Can't be `localhost`; Safaricom's servers call this directly. |
 
 ### Web (`web/.env.example` documents the same set)
 
@@ -85,6 +91,36 @@ manual smoke check:
 3. Ring up a test sale end-to-end (Checkout → complete sale → confirm it lands in Reports).
 4. If the deploy included a migration, confirm the migration actually applied — check the Vercel build
    log for the `prisma migrate deploy` step, or query the target database directly.
+
+## M-Pesa (Daraja) setup
+
+Live M-Pesa payments at checkout (see [ARCHITECTURE.md](./ARCHITECTURE.md#m-pesa-stk-push-integration))
+need a Safaricom Daraja API app. The app boots fine with none of this configured — `POST
+/api/mpesa/stk-push` just returns `503` until it's set up, everything else works normally.
+
+**Sandbox (free, self-serve, for testing before going live):**
+
+1. Create an account at [developer.safaricom.co.ke](https://developer.safaricom.co.ke) and create a new
+   app. This gives you a sandbox **Consumer Key** and **Consumer Secret** — set these as
+   `MPESA_CONSUMER_KEY` / `MPESA_CONSUMER_SECRET`.
+2. Leave `MPESA_SHORTCODE`/`MPESA_PASSKEY`/`MPESA_ENV` unset — the defaults are Safaricom's own
+   published sandbox test values (shortcode `174379`) and already point at the sandbox API.
+3. Set `MPESA_CALLBACK_URL` to your deployed API's `/api/mpesa/callback` — this **must** be a public
+   HTTPS URL Safaricom's servers can reach; `localhost` will never receive a callback. If you're testing
+   locally rather than against a deployed API, you'll need a tunnel (e.g. ngrok) pointed at your local
+   server and use that tunnel's HTTPS URL here.
+4. Test with Safaricom's published sandbox test phone number/PIN (documented on the Daraja sandbox
+   simulator) — a real phone number won't receive an actual prompt in sandbox mode.
+
+**Production (once you're ready to take real payments):**
+
+1. Apply for a production app / Paybill or Till number through Safaricom (this involves real business
+   verification — it's not self-serve like the sandbox).
+2. Set `MPESA_ENV=production`, and swap in your production `MPESA_CONSUMER_KEY`,
+   `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, and `MPESA_PASSKEY` — no code changes required, this is
+   purely an environment variable swap in the API project's Vercel settings.
+3. Update `MPESA_CALLBACK_URL` to the production API URL if it differs from what you tested sandbox
+   against.
 
 ## Resetting a store's data before going live
 

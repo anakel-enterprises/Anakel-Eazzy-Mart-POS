@@ -181,6 +181,7 @@ Lists that product's adjustment history, newest first, each including the acting
 | `couponCode` | string | no | |
 | `creditDueDate` | ISO datetime string | no | CREDIT sales only; defaults to `now + 30 days` |
 | `splitPayments` | array of `{ method: CASH\|MPESA\|CARD\|BANK, amount: positive number }` | no | required (≥2 entries) if `paymentMethod: SPLIT` |
+| `mpesaCheckoutRequestId` | string | no | required if `paymentMethod: MPESA` (standalone, not SPLIT) — see M-Pesa below |
 
 **Idempotency**: this is the endpoint the offline sync queue retries. If a `Sale` with the given
 `clientId` already exists, the request is **not** re-processed — the existing sale is returned as-is
@@ -217,6 +218,16 @@ advance, so a small allowed shortfall/overage avoids spurious rejections); `400`
 unlimited credit**, not "no credit allowed" — this is a schema/business-logic quirk worth knowing before
 relying on it as a hard cap.
 
+**M-Pesa validation**: for a standalone `MPESA` sale (not `SPLIT`), `mpesaCheckoutRequestId` must
+reference an [`MpesaTransaction`](#m-pesa--apimpesa) in the caller's store that is `status: SUCCESS`,
+not already linked to another sale, and whose `amount` covers the total (same shortfall tolerance as
+split payments — the STK push amount is quoted before this request's promotions/coupon are known, so it
+only needs to *cover* the total, not match exactly). `400` if the transaction is missing, still
+`PENDING`, `FAILED`/`CANCELLED`, already used, or short. On success, the transaction is linked to the
+new sale and its `mpesaReceiptNumber` is copied onto `Sale.mpesaReceiptNumber`. `SPLIT`'s MPESA leg is
+unaffected by any of this — like its other legs, it's just a cashier-asserted amount, not verified
+against a real STK push.
+
 **Effects on other tables** (only for `status: COMPLETED`, inside one transaction with the `Sale`
 insert): each item's `Product.stockQty` is decremented; a used coupon's `timesUsed` is incremented; a
 CREDIT sale increments the customer's `creditBalance` by `total`. `HELD` sales don't touch stock,
@@ -235,6 +246,61 @@ including `items` and the cashier's name, newest first.
 ### GET `/api/sales/held`
 
 Returns all `status: HELD` sales for the store with items included, newest first.
+
+## M-Pesa — `/api/mpesa`
+
+Live Safaricom STK Push ("Lipa na M-Pesa Online") integration for standalone MPESA sales. See
+[ARCHITECTURE.md](./ARCHITECTURE.md#m-pesa-stk-push-integration) for the full flow and
+[DEPLOYMENT.md](./DEPLOYMENT.md#m-pesa-daraja-setup) for how to get sandbox/production credentials.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/mpesa/stk-push` | perm:MAKE_SALES | Send an STK push prompt to a customer's phone |
+| GET | `/api/mpesa/stk-push/:checkoutRequestId` | auth | Poll the outcome of a push |
+| POST | `/api/mpesa/callback` | **none (public)** | Safaricom's own callback — not for frontend use |
+
+### POST `/api/mpesa/stk-push`
+
+| Field | Type | Required |
+|---|---|---|
+| `phone` | string | yes — accepts `07XX...`, `01XX...`, `+254...`, or `254...`; normalized server-side to the `2547XXXXXXXX`/`2541XXXXXXXX` form Daraja requires |
+| `amount` | number, positive | yes |
+
+Calls Safaricom's Daraja API to send a PIN prompt to the customer's phone, then creates a `PENDING`
+`MpesaTransaction` row scoped to the caller's store and cashier. This only confirms Safaricom *accepted*
+the request — not that the customer approved it; that outcome arrives later via the callback route.
+
+Responses:
+- `201` — `{ checkoutRequestId, merchantRequestId, customerMessage }`. Poll `checkoutRequestId` next.
+- `503` — M-Pesa isn't configured yet (missing `MPESA_CONSUMER_KEY`/`MPESA_CONSUMER_SECRET`/`MPESA_CALLBACK_URL`).
+- `502` — Safaricom rejected the request (bad credentials, invalid shortcode, etc.) — the error message is Safaricom's own.
+- `400` — the phone number couldn't be normalized to a Kenyan MSISDN.
+
+### GET `/api/mpesa/stk-push/:checkoutRequestId`
+
+Polled by the checkout screen every few seconds while waiting on the customer. `404` if the id isn't
+found in the caller's store. Response:
+```json
+{ "status": "PENDING", "mpesaReceiptNumber": null, "resultDesc": null, "amount": "150.00", "phone": "254712345678" }
+```
+`status` is one of `PENDING` (still waiting), `SUCCESS` (paid — `mpesaReceiptNumber` is set), `FAILED`
+(a real failure — insufficient funds, generic decline), or `CANCELLED` (the customer explicitly declined
+the prompt on their phone; Safaricom result code `1032`, split out from `FAILED` so the UI can phrase it
+appropriately).
+
+### POST `/api/mpesa/callback`
+
+**Not authenticated** — Safaricom's servers call this directly and can't attach a JWT.
+`checkoutRequestId`, a token Safaricom itself generated, is what actually scopes this to one pending
+transaction; there is no additional signature/IP verification. Register this URL (your deployed API's
+`/api/mpesa/callback`) as the `CallBackURL` on your Daraja app — every STK push's callback route is
+whatever `MPESA_CALLBACK_URL` was set to at push time.
+
+Expects Safaricom's `stkCallback` payload shape and **always** responds `200` with
+`{ "ResultCode": 0, "ResultDesc": "Accepted" }`, even for an unrecognized or already-resolved
+`checkoutRequestId` — returning anything else risks Safaricom treating the delivery as failed and
+retrying indefinitely. A callback for a transaction that isn't `PENDING` anymore (already resolved by an
+earlier delivery) is acknowledged and ignored rather than reprocessed.
 
 ## Cash Register — `/api/cash-register`
 
@@ -545,22 +611,22 @@ currently unused anyway, since `Sale.taxTotal` is hardcoded to `0`.
 
 Body: `{ "confirm": "DELETE" }` — the literal string `"DELETE"`, nothing else validates.
 
-**Irreversible.** Deletes, in one transaction (30s timeout), every `Sale`, `StockAdjustment`,
-`CashRegisterSession`, `CreditPayment`, `Customer`, `SupplierTransaction`, `Supplier`, `Expense`,
-`ExpenseCategory`, `Income`, `Promotion`, `Coupon`, `Product`, and `Category` for the caller's store —
-in that exact order, because FK `RESTRICT` constraints require sales (and everything a sale might
-reference) to go first. `SaleItem`/`SalePayment` aren't listed explicitly because they cascade-delete
-automatically with their parent `Sale`. **`User` accounts and the `Store` row itself are never
-touched** — this is meant for clearing out seed/test data before a store goes live, without losing
-employee logins or the store profile.
+**Irreversible.** Deletes, in one transaction (30s timeout), every `MpesaTransaction`, `Sale`,
+`StockAdjustment`, `CashRegisterSession`, `CreditPayment`, `Customer`, `SupplierTransaction`,
+`Supplier`, `Expense`, `ExpenseCategory`, `Income`, `Promotion`, `Coupon`, `Product`, and `Category` for
+the caller's store — in that exact order, because FK `RESTRICT` constraints require sales (and
+everything a sale might reference) to go first. `SaleItem`/`SalePayment` aren't listed explicitly
+because they cascade-delete automatically with their parent `Sale`. **`User` accounts and the `Store`
+row itself are never touched** — this is meant for clearing out seed/test data before a store goes
+live, without losing employee logins or the store profile.
 
 Response:
 ```json
 {
   "deleted": {
-    "sales": 0, "stockAdjustments": 0, "registerSessions": 0, "creditPayments": 0,
-    "customers": 0, "supplierTransactions": 0, "suppliers": 0, "expenses": 0,
-    "expenseCategories": 0, "incomes": 0, "promotions": 0, "coupons": 0,
+    "mpesaTransactions": 0, "sales": 0, "stockAdjustments": 0, "registerSessions": 0,
+    "creditPayments": 0, "customers": 0, "supplierTransactions": 0, "suppliers": 0,
+    "expenses": 0, "expenseCategories": 0, "incomes": 0, "promotions": 0, "coupons": 0,
     "products": 0, "categories": 0
   }
 }

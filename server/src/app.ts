@@ -14,6 +14,7 @@ import { suppliersRouter } from "./routes/suppliers.js";
 import { customersRouter } from "./routes/customers.js";
 import { expensesRouter, incomeRouter } from "./routes/expenses.js";
 import { promotionsRouter, couponsRouter } from "./routes/promotions.js";
+import { mpesaRouter } from "./routes/mpesa.js";
 
 export const app = express();
 
@@ -36,6 +37,7 @@ app.use("/api/expenses", expensesRouter);
 app.use("/api/income", incomeRouter);
 app.use("/api/promotions", promotionsRouter);
 app.use("/api/coupons", couponsRouter);
+app.use("/api/mpesa", mpesaRouter);
 
 app.use(errorHandler);
 

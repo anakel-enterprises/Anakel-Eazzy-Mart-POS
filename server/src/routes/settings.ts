@@ -50,6 +50,7 @@ settingsRouter.post(
 
     const deleted = await prisma.$transaction(
       async (tx) => {
+        const mpesaTransactions = await tx.mpesaTransaction.deleteMany({ where: { storeId } });
         const sales = await tx.sale.deleteMany({ where: { storeId } });
         const stockAdjustments = await tx.stockAdjustment.deleteMany({ where: { storeId } });
         const registerSessions = await tx.cashRegisterSession.deleteMany({ where: { storeId } });
@@ -66,6 +67,7 @@ settingsRouter.post(
         const categories = await tx.category.deleteMany({ where: { storeId } });
 
         return {
+          mpesaTransactions: mpesaTransactions.count,
           sales: sales.count,
           stockAdjustments: stockAdjustments.count,
           registerSessions: registerSessions.count,

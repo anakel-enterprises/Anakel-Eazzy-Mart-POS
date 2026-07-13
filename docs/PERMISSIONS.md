@@ -31,7 +31,7 @@ A request only needs to satisfy **one** applicable check per route — routes ar
 
 | Category | Key | Label | Gates (examples) |
 |---|---|---|---|
-| Sales | `MAKE_SALES` | Can make sales & manage the cash register | `POST /api/sales`, all of `/api/cash-register/*` |
+| Sales | `MAKE_SALES` | Can make sales & manage the cash register | `POST /api/sales`, all of `/api/cash-register/*`, `POST /api/mpesa/stk-push` |
 | Sales | `MANAGE_CUSTOMERS` | Can view & manage customers / credit sales | `POST/PUT /api/customers`, `POST /api/customers/:id/payments` |
 | Sales | `VIEW_REPORTS` | Can view reports & sales totals | every route under `/api/reports/*` |
 | Stock | `MANAGE_PRODUCTS` | Can add/edit products, categories & stock | `/api/products/*` mutations, `/api/categories/*` mutations, stock adjustments |
