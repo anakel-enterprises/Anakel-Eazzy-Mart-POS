@@ -346,6 +346,18 @@ actually processed the sale, for the same reason Checkout's own on-screen total 
   won't appear in Dashboard's list until the next real fetch (Inventory has no such gap, since it always
   returns every product).
 
+**Every money field arrives as a JSON string, not a number — convert before doing arithmetic on it.**
+Prisma `Decimal` fields (every money field in the schema) serialize via `Decimal.prototype.toJSON()`,
+which returns a string like `"340.00"`; the report TypeScript types say `number`, but that's only true
+once something explicitly converts it. `currencyFmt.format(x)` and unary negation (`-x`) both happen to
+coerce a string correctly, which is why the plain display code elsewhere in Reports.tsx never surfaced
+this — but a bare `total += serverValue` silently does *string concatenation* instead of addition
+whenever `serverValue` hasn't been converted (`"0" + 340` reads back as `340` by coincidence; `"0" + 340
++ 220` becomes `"0340220"`, which reads back as `340,220` — a wildly wrong number that only appears once
+there's more than one value to accumulate, which is exactly what an overlay does). `offlineStats.ts`'s
+`num()` helper wraps every `data`-sourced numeric read for this reason — treat any new field read from a
+report response the same way, regardless of what the TypeScript type claims.
+
 **Closing the "just synced" race** (`SALES_SYNCED_EVENT`, `web/src/lib/sync.ts`): when connectivity
 returns, both the sync engine's `flushPendingSales()` and each report's own `"online"` refetch listener
 fire off their own independent async chains. `flushPendingSales()` awaits a reachability check and then

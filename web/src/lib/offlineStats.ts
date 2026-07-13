@@ -31,6 +31,26 @@ import type {
 //    these overlays only ever look at "pending"/"error" sales, so a synced
 //    sale is never double-counted against the next fresh server fetch.
 
+// Prisma `Decimal` fields (every money field in the schema) serialize as
+// JSON *strings* (e.g. "340.00"), not numbers — Express's res.json() calls
+// Decimal.prototype.toJSON(), which returns a string. The report TypeScript
+// types say `number`, but that's only true after something explicitly
+// converts it; several places elsewhere in this codebase already have to
+// defend against this (e.g. Reports.tsx's Inventory/Suppliers tabs wrap
+// values in Number() before using them). It matters a lot here: a bare
+// `total += serverValue` silently does *string concatenation* instead of
+// addition whenever `serverValue` hasn't been converted — "0" + 340 reads
+// back as 340 by coincidence, but "0" + 340 + 220 becomes "0340220", which
+// reads back as 340,220 — a wildly, confusingly wrong number that only
+// shows up once there's more than one sale to accumulate. Every read of a
+// data-sourced numeric field in this file goes through this to rule that
+// out entirely, regardless of whether a given field happens to already be a
+// real number server-side.
+function num(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function estimateSaleTotal(sale: PendingSale): number {
   return sale.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
 }
@@ -62,9 +82,9 @@ export function overlayDashboard(
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  let todaysSalesTotal = data.todaysSalesTotal;
-  let todaysTransactionCount = data.todaysTransactionCount;
-  const weeklyMap = new Map(data.weeklySales.map((d) => [d.date, d.total]));
+  let todaysSalesTotal = num(data.todaysSalesTotal);
+  let todaysTransactionCount = num(data.todaysTransactionCount);
+  const weeklyMap = new Map(data.weeklySales.map((d) => [d.date, num(d.total)]));
   const stockDelta = new Map<string, number>();
   const extraRecent: DashboardData["recentSales"] = [];
 
@@ -105,14 +125,14 @@ export function overlayDashboard(
   const lowStock = data.lowStock
     .map((p) => {
       const sold = stockDelta.get(p.id);
-      return sold ? { ...p, stockQty: p.stockQty - sold } : p;
+      return sold ? { ...p, stockQty: num(p.stockQty) - sold } : p;
     })
     .sort((a, b) => a.stockQty - b.stockQty);
 
   return {
     todaysSalesTotal,
     todaysTransactionCount,
-    weeklySales: data.weeklySales.map((d) => ({ date: d.date, total: weeklyMap.get(d.date) ?? d.total })),
+    weeklySales: data.weeklySales.map((d) => ({ date: d.date, total: weeklyMap.get(d.date) ?? num(d.total) })),
     lowStock,
     recentSales,
   };
@@ -121,13 +141,18 @@ export function overlayDashboard(
 export function overlaySalesSummary(data: SalesSummary, sales: PendingSale[]): SalesSummary {
   if (sales.length === 0) return data;
 
-  let subtotal = data.totals._sum.subtotal ?? 0;
-  let total = data.totals._sum.total ?? 0;
-  let count = data.totals._count;
+  let subtotal = num(data.totals._sum.subtotal);
+  let total = num(data.totals._sum.total);
+  let count = num(data.totals._count);
 
-  const byMethod = new Map(data.byPaymentMethod.map((m) => [m.paymentMethod, { total: m._sum.total ?? 0, count: m._count }]));
+  const byMethod = new Map(
+    data.byPaymentMethod.map((m) => [m.paymentMethod, { total: num(m._sum.total), count: num(m._count) }])
+  );
   const byProduct = new Map(
-    data.topProducts.map((p) => [p.productId, { name: p.name, quantity: p._sum.quantity ?? 0, lineTotal: p._sum.lineTotal ?? 0 }])
+    data.topProducts.map((p) => [
+      p.productId,
+      { name: p.name, quantity: num(p._sum.quantity), lineTotal: num(p._sum.lineTotal) },
+    ])
   );
 
   for (const sale of sales) {
@@ -155,7 +180,7 @@ export function overlaySalesSummary(data: SalesSummary, sales: PendingSale[]): S
     .slice(0, 10);
 
   return {
-    totals: { _sum: { subtotal, taxTotal: data.totals._sum.taxTotal ?? 0, total }, _count: count },
+    totals: { _sum: { subtotal, taxTotal: num(data.totals._sum.taxTotal), total }, _count: count },
     byPaymentMethod: Array.from(byMethod.entries()).map(([paymentMethod, v]) => ({ paymentMethod, _sum: { total: v.total }, _count: v.count })),
     topProducts,
   };
@@ -164,9 +189,9 @@ export function overlaySalesSummary(data: SalesSummary, sales: PendingSale[]): S
 export function overlayProfit(data: ProfitReport, sales: PendingSale[], productCost: Map<string, number>): ProfitReport {
   if (sales.length === 0) return data;
 
-  let revenue = data.revenue;
-  let cogs = data.cogs;
-  const byProduct = new Map(data.byProduct.map((p) => [p.productId, { name: p.name, revenue: p.revenue, cost: p.cost }]));
+  let revenue = num(data.revenue);
+  let cogs = num(data.cogs);
+  const byProduct = new Map(data.byProduct.map((p) => [p.productId, { name: p.name, revenue: num(p.revenue), cost: num(p.cost) }]));
 
   for (const sale of sales) {
     for (const item of sale.items) {
@@ -206,14 +231,14 @@ export function overlayProfitLoss(data: ProfitLossReport, sales: PendingSale[], 
     cogsDelta += estimateSaleCogs(sale, productCost);
   }
 
-  const netSales = data.netSales + netSalesDelta;
-  const cogs = data.cogs + cogsDelta;
+  const netSales = num(data.netSales) + netSalesDelta;
+  const cogs = num(data.cogs) + cogsDelta;
   const grossProfit = netSales - cogs;
-  const netProfit = grossProfit + data.otherIncome - data.totalExpenses;
+  const netProfit = grossProfit + num(data.otherIncome) - num(data.totalExpenses);
 
   return {
     ...data,
-    transactionCount: data.transactionCount + sales.length,
+    transactionCount: num(data.transactionCount) + sales.length,
     netSales,
     cogs,
     grossProfit,
@@ -247,10 +272,10 @@ export function overlayAnalytics(data: AnalyticsReport, sales: PendingSale[], pr
     }
   }
 
-  const revenue = data.current.revenue + revenueDelta;
-  const cogs = data.current.cogs + cogsDelta;
+  const revenue = num(data.current.revenue) + revenueDelta;
+  const cogs = num(data.current.cogs) + cogsDelta;
   const grossProfit = revenue - cogs;
-  const netProfit = grossProfit + data.current.otherIncome - data.current.expenses;
+  const netProfit = grossProfit + num(data.current.otherIncome) - num(data.current.expenses);
   const current = {
     ...data.current,
     revenue,
@@ -267,7 +292,7 @@ export function overlayAnalytics(data: AnalyticsReport, sales: PendingSale[], pr
   // never created in the first place because there was no data for it yet
   // (e.g. the very first sale of the day has no "today" bucket to adjust,
   // only one to add).
-  const trendMap = new Map(data.trend.map((p) => [p.label, { ...p }]));
+  const trendMap = new Map(data.trend.map((p) => [p.label, { label: p.label, sales: num(p.sales), expenses: num(p.expenses), profit: num(p.profit) }]));
   for (const [label, delta] of trendDelta) {
     const point = trendMap.get(label) ?? { label, sales: 0, expenses: 0, profit: 0 };
     point.sales += delta.sales;
@@ -276,7 +301,7 @@ export function overlayAnalytics(data: AnalyticsReport, sales: PendingSale[], pr
   }
   const trend = Array.from(trendMap.values()).sort((a, b) => (a.label < b.label ? -1 : 1));
 
-  const topProductsMap = new Map(data.topProducts.map((p) => [p.name, p.revenue]));
+  const topProductsMap = new Map(data.topProducts.map((p) => [p.name, num(p.revenue)]));
   for (const [name, delta] of productRevenueDelta) {
     topProductsMap.set(name, (topProductsMap.get(name) ?? 0) + delta);
   }
@@ -299,17 +324,19 @@ export function overlayInventory(data: InventoryReport, sales: PendingSale[]): I
   }
   if (soldByProduct.size === 0) return data;
 
-  let retailValue = data.retailValue;
-  let costValue = data.costValue;
-  let totalUnits = data.totalUnits;
+  let retailValue = num(data.retailValue);
+  let costValue = num(data.costValue);
+  let totalUnits = num(data.totalUnits);
 
   const products = data.products.map((p) => {
     const sold = soldByProduct.get(p.id);
     if (!sold) return p;
-    retailValue -= p.price * sold;
-    costValue -= (p.cost ?? 0) * sold;
+    const price = num(p.price);
+    const cost = num(p.cost);
+    retailValue -= price * sold;
+    costValue -= cost * sold;
     totalUnits -= sold;
-    return { ...p, stockQty: p.stockQty - sold };
+    return { ...p, stockQty: num(p.stockQty) - sold };
   });
 
   return { ...data, totalUnits, retailValue, costValue, potentialProfit: retailValue - costValue, products };
@@ -326,12 +353,12 @@ export function overlayFinance(data: FinanceReport, sales: PendingSale[]): Finan
     if (sale.paymentMethod === "CREDIT") creditDelta += total;
   }
 
-  const revenue = data.revenue + revenueDelta;
+  const revenue = num(data.revenue) + revenueDelta;
   return {
     ...data,
     revenue,
-    netCashFlow: revenue + data.otherIncome - data.expenses,
-    creditOutstanding: data.creditOutstanding + creditDelta,
+    netCashFlow: revenue + num(data.otherIncome) - num(data.expenses),
+    creditOutstanding: num(data.creditOutstanding) + creditDelta,
   };
 }
 
@@ -339,7 +366,9 @@ export function overlayCustomers(data: CustomersReport, sales: PendingSale[]): C
   if (sales.length === 0) return data;
 
   let creditDelta = 0;
-  const topMap = new Map(data.topCustomers.map((c) => [c.customerId, { name: c.name, totalSpent: c.totalSpent, orderCount: c.orderCount }]));
+  const topMap = new Map(
+    data.topCustomers.map((c) => [c.customerId, { name: c.name, totalSpent: num(c.totalSpent), orderCount: num(c.orderCount) }])
+  );
 
   for (const sale of sales) {
     const total = estimateSaleTotal(sale);
@@ -356,7 +385,7 @@ export function overlayCustomers(data: CustomersReport, sales: PendingSale[]): C
     .sort((a, b) => b.totalSpent - a.totalSpent)
     .slice(0, 10);
 
-  return { ...data, creditOutstanding: data.creditOutstanding + creditDelta, topCustomers };
+  return { ...data, creditOutstanding: num(data.creditOutstanding) + creditDelta, topCustomers };
 }
 
 export function overlayEmployeePerformance(
@@ -369,7 +398,9 @@ export function overlayEmployeePerformance(
   const totalDelta = sales.reduce((sum, s) => sum + estimateSaleTotal(s), 0);
   const existing = data.some((r) => r.cashierId === currentUser.id);
   const rows = data.map((r) =>
-    r.cashierId === currentUser.id ? { ...r, totalSales: r.totalSales + totalDelta, transactionCount: r.transactionCount + sales.length } : r
+    r.cashierId === currentUser.id
+      ? { ...r, totalSales: num(r.totalSales) + totalDelta, transactionCount: num(r.transactionCount) + sales.length }
+      : { ...r, totalSales: num(r.totalSales), transactionCount: num(r.transactionCount) }
   );
   if (!existing) {
     rows.push({ cashierId: currentUser.id, name: currentUser.name, totalSales: totalDelta, transactionCount: sales.length });
