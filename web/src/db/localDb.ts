@@ -1,4 +1,5 @@
 import Dexie, { type Table } from "dexie";
+import type { AuthUser } from "../types/auth";
 
 export interface CachedProduct {
   id: string;
@@ -69,11 +70,29 @@ export interface CachedApiResponse {
   cachedAt: string;
 }
 
+// Lets this device verify a login without contacting the server — written
+// on every successful *online* login, so an idle-timeout, an explicit
+// logout, or just reopening the app while offline never fully locks a
+// cashier out of an offline-first POS. Never holds the plaintext password —
+// only a salted PBKDF2 hash of it (see lib/offlineAuth.ts) — plus the most
+// recently issued JWT for that user, which is what actually authenticates
+// API calls once "logged in" this way.
+export interface OfflineCredential {
+  email: string; // lowercased, primary key
+  salt: string; // hex
+  hash: string; // hex, PBKDF2-SHA256
+  iterations: number;
+  token: string;
+  user: AuthUser;
+  updatedAt: string;
+}
+
 class LocalDb extends Dexie {
   products!: Table<CachedProduct, string>;
   pendingSales!: Table<PendingSale, string>;
   heldSales!: Table<HeldSale, string>;
   apiCache!: Table<CachedApiResponse, string>;
+  offlineCredentials!: Table<OfflineCredential, string>;
 
   constructor() {
     super("anakel-pos");
@@ -91,6 +110,13 @@ class LocalDb extends Dexie {
       pendingSales: "clientId, syncStatus, createdAt",
       heldSales: "id, createdAt",
       apiCache: "url",
+    });
+    this.version(4).stores({
+      products: "id, name, sku, barcode",
+      pendingSales: "clientId, syncStatus, createdAt",
+      heldSales: "id, createdAt",
+      apiCache: "url",
+      offlineCredentials: "email",
     });
   }
 }

@@ -166,6 +166,46 @@ page-header component doing this centrally.
   of the app; `user.permissions` is the fully-resolved `PermissionMap` returned by the API, not
   recomputed client-side.
 
+### Offline login
+
+The idle timeout above, an explicit logout, or just reopening the app after its `auth_user` cache was
+cleared all land back on the login *form* — not just a stale-but-usable session — which would otherwise
+mean a device with no connectivity right now can't be used at all, undermining the point of an
+offline-first POS. `AuthContext.login()` handles this: it tries the real `POST /api/auth/login` first
+(with an 8s timeout, not the default 15s, so a genuinely offline attempt fails into the fallback quickly
+rather than leaving the cashier watching a spinner), and only falls back to a local check when the
+request fails with `ApiError.status === 0` — i.e. the server was flat-out unreachable, never actually
+weighed in. A real `401` from a reachable server is left alone; the server stays authoritative whenever
+it can be reached.
+
+The local fallback (`web/src/lib/offlineAuth.ts`) is written on every *successful online* login, keyed
+by email in a new Dexie table (`offlineCredentials`, schema v4):
+
+| Field | Purpose |
+|---|---|
+| `salt`, `hash`, `iterations` | A PBKDF2-SHA256 hash of the password (Web Crypto, 200,000 iterations, no external dependency) — **the plaintext password itself is never stored**, only this. |
+| `token` | The JWT issued by that login — offline verification can't mint a new one (no access to the server's signing secret), so a correct offline login just replays the last real one, as long as it hasn't expired. |
+| `user` | The user/role/permissions snapshot from that same login, restored alongside the token. |
+
+`tryOfflineLogin(email, password)` re-derives the hash with the stored salt/iterations and compares it
+to what's cached; on a match it decodes the cached JWT's `exp` claim (no signature check — there's no
+way to verify that offline anyway, and `requireAuth` re-verifies it server-side on the next real
+request) to make sure it isn't already past its 30-day expiry before handing it back. Three distinct
+outcomes surface as three different messages on the login form, deliberately not collapsed into one
+generic "invalid credentials": no cached record for that email (`"This device hasn't seen that account
+sign in before — connect online once first"`), a cached-but-expired token (`"...connect online once to
+renew it"`), and a genuine password mismatch (the normal `"Invalid email or password"`).
+
+**Why this doesn't weaken the security model**: a successful offline login never grants anything the
+device didn't already have — it just decides whether to *use* an already-issued, already-cached JWT
+that (like every JWT here) still gets fully re-validated by `requireAuth` against live account state the
+next time it actually reaches the server. Disabling an employee's account or changing their password
+takes effect the same way it already does today: on that device's next *online* request, not
+instantly — this feature doesn't change that window, it only lets the login screen itself work through
+it instead of blocking the whole app. The cached hash only has to resist a lost/stolen device's local
+storage being read directly, not a remote attacker, which is a materially different (and much easier)
+bar than what a server-side password store has to clear.
+
 ### API client (`src/lib/api.ts`)
 
 A thin `fetch` wrapper (`apiFetch`) that adds the auth header, applies a 15-second timeout via
@@ -188,6 +228,7 @@ keeps working with no connectivity.
 | `pendingSales` | The offline sale queue. Each row has a client-generated `clientId` (`${Date.now()}-${crypto.randomUUID()}`) — the same idempotency key `POST /api/sales` dedupes on — plus a `syncStatus` of `pending`/`synced`/`error`. |
 | `heldSales` | Purely local "pause and resume" cart holds, added in schema v2. These never touch the server at all — a cashier can hold and resume a cart with zero connectivity. This is a separate mechanism from the `Sale.status = HELD` value that exists in the database schema; the server-side HELD status currently has no endpoint that transitions it to COMPLETED, so in practice held/parked carts are handled entirely client-side today. |
 | `apiCache` | Added in schema v3. A generic last-known-good snapshot of read-only GET responses (Dashboard/Reports stats), keyed by a stable cache key per report+period — see [Offline statistics](#offline-statistics) below. |
+| `offlineCredentials` | Added in schema v4. A salted PBKDF2 hash (never the plaintext) plus the last-issued JWT per email, written on every successful online login — lets the login form itself work with no connectivity. See [Offline login](#offline-login). |
 
 ### Sync engine (`web/src/lib/sync.ts`)
 

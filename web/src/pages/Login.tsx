@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { ApiError } from "../lib/api";
 import { Button } from "../components/ui";
 
 export function Login() {
@@ -20,7 +19,10 @@ export function Login() {
       await login(email, password);
       navigate("/");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not reach the server");
+      // Covers both a real server-side rejection (ApiError) and the local
+      // offline-login fallback's own messages (a plain Error — see
+      // AuthContext.login) with the same handling.
+      setError(err instanceof Error ? err.message : "Could not reach the server");
     } finally {
       setSubmitting(false);
     }

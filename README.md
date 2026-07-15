@@ -80,7 +80,9 @@ inventory).
 
 ## Offline behavior
 
-Checkout reads and writes against a local Dexie (IndexedDB) database first. Completed sales are queued
+Signing in works offline too, as long as this device has signed in with that account at least once
+before while online — an idle timeout, a logout, or reopening the app doesn't lock a cashier out just
+because there's no connectivity right now. Checkout reads and writes against a local Dexie (IndexedDB) database first. Completed sales are queued
 locally with a client-generated `clientId` and pushed to the server when online; the server treats
 `clientId` as an idempotency key so a retried sync never double-books a sale or double-counts stock. The
 product catalog is cached locally on login and refreshed whenever the app comes back online. Dashboard
