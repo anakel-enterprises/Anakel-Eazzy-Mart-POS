@@ -224,11 +224,14 @@ keeps working with no connectivity.
 
 | Table | Purpose |
 |---|---|
-| `products` | A flattened read-only mirror of the server's product catalog, used for offline search/pricing at checkout. Fully replaced (`clear()` + `bulkPut()`) on every refresh — no incremental diffing. |
+| `products` | A local, writable mirror of the server's product catalog — used for offline search/pricing at Checkout and for the Inventory list itself. `refreshProductCache()` upserts every server row but only deletes rows the server actually reports gone, never wiping the whole table — a product created on this device while offline lives here under a local-only id until its own sync completes (see [Offline product management](#offline-product-management)). |
 | `pendingSales` | The offline sale queue. Each row has a client-generated `clientId` (`${Date.now()}-${crypto.randomUUID()}`) — the same idempotency key `POST /api/sales` dedupes on — plus a `syncStatus` of `pending`/`synced`/`error`. |
 | `heldSales` | Purely local "pause and resume" cart holds, added in schema v2. These never touch the server at all — a cashier can hold and resume a cart with zero connectivity. This is a separate mechanism from the `Sale.status = HELD` value that exists in the database schema; the server-side HELD status currently has no endpoint that transitions it to COMPLETED, so in practice held/parked carts are handled entirely client-side today. |
 | `apiCache` | Added in schema v3. A generic last-known-good snapshot of read-only GET responses (Dashboard/Reports stats), keyed by a stable cache key per report+period — see [Offline statistics](#offline-statistics) below. |
 | `offlineCredentials` | Added in schema v4. A salted PBKDF2 hash (never the plaintext) plus the last-issued JWT per email, written on every successful online login — lets the login form itself work with no connectivity. See [Offline login](#offline-login). |
+| `pendingProducts` | Added in schema v5. The offline product-create queue, one row per `queueProductCreate()` call, keyed by a local-only `clientId` that also doubles as the product's `id` in `products` until it syncs. See [Offline product management](#offline-product-management). |
+| `pendingProductEdits` | Added in schema v5. The offline product-edit queue for products that already have a real server id — keyed by `productId`, so a second edit before the first syncs just overwrites the row (latest wins). |
+| `pendingStockAdjustments` | Added in schema v5. The offline stock-adjustment queue for products that already have a real server id — one row per adjustment (not coalesced), mirroring the server's `StockAdjustment` audit trail. |
 
 ### Sync engine (`web/src/lib/sync.ts`)
 
@@ -280,8 +283,60 @@ sequenceDiagram
   and applies its own pricing tier, promotion, and coupon logic independently once the sale syncs
   (see [API.md](./API.md#post-apisales)).
 - Dashboard and Reports show cached figures offline, live-adjusted for sales rung up on this device that
-  haven't synced yet (see below); everything else (employee management, supplier ledgers, settings,
-  etc.) has no offline support — those pages call the API directly and simply fail if unreachable.
+  haven't synced yet (see below). Inventory (adding, editing, and stock-adjusting products) also works
+  fully offline — see [Offline product management](#offline-product-management) — but everything else
+  (employee management, supplier ledgers, expenses/income, promotions, settings, etc.) has no offline
+  support: those pages call the API directly and simply fail if unreachable.
+
+### Offline product management
+
+Adding a product, editing one, and adjusting stock all go through the same "write locally first, sync
+after" queue shape as a sale — online or offline, there's no branching on connectivity, just a possibly
+longer wait before the write reaches the server.
+
+**Adding a product** (`queueProductCreate()`): writes a `pendingProducts` row and, in the same
+transaction, an optimistic row into `products` under a **local-only id** (`local_<clientId>`, see
+`isLocalProductId`/`newLocalProductId` in `db/localDb.ts`). Because Inventory and Checkout both read
+from the same `products` table, the new product is immediately visible in the Inventory list *and*
+searchable/sellable at Checkout — before it has ever reached the server. `POST /api/products` accepts an
+optional `clientId`; if a product with that `clientId` already exists for the store, the create is
+short-circuited and the existing row is returned instead — the same idempotency pattern as `Sale`, so a
+retried sync after a dropped response never creates a duplicate product.
+
+**The id remap problem**: once a locally-created product's `POST` actually succeeds, the server hands
+back a real id, but everything on this device still refers to the old local one. `remapLocalProductId()`
+runs immediately after that POST resolves and rewrites every local reference in one transaction: the
+cached `products` row itself, and the `productId` on any not-yet-synced `pendingSales` item that already
+rang up this product (a cashier can add a product and sell it before the create has even synced — that's
+expected, not an edge case to avoid). One gap this doesn't cover: a cart line already open in the
+Checkout UI at the exact moment the remap happens keeps its in-memory reference to the old id for the
+rest of that transaction. In practice the sync window is short (seconds) and this requires adding a
+product and ringing it up in the same breath as a background sync fires, so it's an accepted narrow risk
+rather than something actively guarded against.
+
+**Editing a product or adjusting its stock** (`queueProductEdit()` / `queueStockAdjustment()`): only
+apply to a product that already has a real server id — `PUT /api/products/:id` and
+`POST /api/products/:id/adjustments` respectively, both applied optimistically to the cached row first.
+Editing a product that's *still* only a `pendingProducts` row (its own create hasn't synced yet) skips
+this queue entirely — `patchPendingProduct()` patches that row directly, since there's nothing to `PUT`
+against until the create itself lands; the next flush just sends the updated create payload. Unlike a
+product edit (a `PUT`, safe to resend), a stock adjustment increments `stockQty` rather than overwriting
+it, so `POST /api/products/:id/adjustments` also accepts an optional `clientId` for the same
+retry-safety reason as `Sale`/`Product`.
+
+**Flush ordering**: `flushPendingSales()` always calls `flushPendingProducts()` first, before reading its
+own queue — a sale referencing a brand-new local product would otherwise risk reaching the server before
+that product's create has, and get rejected as an unknown product. All four flush functions
+(`flushPendingSales`, `flushPendingProducts`, `flushPendingProductEdits`, `flushPendingStockAdjustments`)
+share one in-flight-promise pattern: a call made while one is already running returns *that* run's result
+instead of a stale no-op, so the background timer, the `online` listener, and a direct call from
+`queueSale`/`queueProductCreate` firing within milliseconds of each other never silently skip work.
+
+**Gap**: Reports' Inventory tab and the P&L/Analytics COGS estimates are driven by the server's own
+report endpoints, cached via `getCached()` — they reflect a product added or edited on this device only
+after that write has synced and a fresh report has been fetched, not live like Dashboard/Reports' sales
+overlay. A newly-added offline product shows up in Inventory and is sellable at Checkout immediately, but
+won't appear in a Reports figure until it's synced.
 
 ### Offline statistics
 
@@ -538,3 +593,9 @@ does:
 - **No STK push cancel/reversal endpoint.** If a cashier abandons a push after sending it (customer
   walked away, wrong amount), the `MpesaTransaction` just sits `PENDING` until it naturally times out or
   the customer declines — there's no way to proactively cancel it server-side.
+- **Offline support is scoped to Checkout/Dashboard/Reports/Inventory only** — Suppliers, Customers,
+  Expenses & Income, Promotions & Coupons, Cash Register, Employees, and Settings all call the API
+  directly with no offline queue, and simply fail if the device is unreachable. CSV product import
+  (`ImportProductsModal`) is part of Inventory but was deliberately left online-only too — it's a bulk
+  server-side operation (auto-creates categories, upserts by SKU) that doesn't fit the same per-row
+  local-first queue as a single product add.

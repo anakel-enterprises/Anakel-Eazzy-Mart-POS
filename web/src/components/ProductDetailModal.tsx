@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api } from "../lib/api";
+import { isLocalProductId } from "../db/localDb";
+import { patchPendingProduct, queueProductEdit, queueStockAdjustment } from "../lib/sync";
 import { Button, Card } from "./ui";
 
 export interface ProductDetail {
@@ -12,7 +13,6 @@ export interface ProductDetail {
   stockQty: number;
   lowStockThreshold: number;
   categoryId?: string | null;
-  category: { name: string } | null;
 }
 
 interface Category {
@@ -61,29 +61,42 @@ export function ProductDetailModal({
       return;
     }
     setSaving(true);
-    try {
-      await api.put(`/api/products/${product.id}`, {
+
+    const costNum = cost.trim() === "" ? undefined : Number(cost);
+    const categoryName = categoryId ? categories.find((c) => c.id === categoryId)?.name ?? null : null;
+
+    // Every write below queues locally and syncs in the background — same
+    // write-through-the-offline-queue shape as the rest of the app, so this
+    // never has to branch on connectivity.
+    if (isLocalProductId(product.id)) {
+      // This product's own create hasn't synced yet — there's nothing to PUT
+      // against, so fold the edit straight into the still-pending create.
+      await patchPendingProduct(product.id, {
+        name: name.trim(),
+        categoryId: categoryId || undefined,
+        categoryName,
+        price: priceNum,
+        cost: costNum,
+        lowStockThreshold: Number(lowStockThreshold) || 0,
+        stockQty: newStockQty,
+      });
+    } else {
+      await queueProductEdit(product.id, {
         name: name.trim(),
         categoryId: categoryId || null,
+        categoryName,
         price: priceNum,
-        cost: cost.trim() === "" ? undefined : Number(cost),
+        cost: costNum,
         lowStockThreshold: Number(lowStockThreshold) || 0,
       });
-
       if (deltaNum !== 0) {
-        await api.post(`/api/products/${product.id}/adjustments`, {
-          quantityDelta: deltaNum,
-          reason: "MANUAL_CORRECTION",
-        });
+        await queueStockAdjustment(product.id, deltaNum, "MANUAL_CORRECTION");
       }
-
-      onSaved();
-      onClose();
-    } catch {
-      setError("Couldn't save changes — check the fields and try again.");
-    } finally {
-      setSaving(false);
     }
+
+    setSaving(false);
+    onSaved();
+    onClose();
   }
 
   return (

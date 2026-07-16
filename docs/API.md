@@ -117,9 +117,16 @@ filter to items where `stockQty <= lowStockThreshold`). Only returns `active: tr
 | `stockQty` | integer, ≥ 0 | no | default `0` on create |
 | `lowStockThreshold` | integer, ≥ 0 | no | default `5` |
 | `imageUrl` | string | no | |
+| `clientId` | string | no | POST only — see below |
 
-PUT accepts a partial version of the same schema. `404 Product not found` if the id isn't in the
-caller's store.
+PUT accepts a partial version of the same schema (no `clientId` — a PUT is already safe to retry as-is).
+`404 Product not found` if the id isn't in the caller's store.
+
+**Idempotency**: `clientId` is set when a product is created offline and queued for sync (see
+[ARCHITECTURE.md](./ARCHITECTURE.md#offline-product-management)). If a product with that `clientId`
+already exists for the caller's store, POST returns it as-is with `200` instead of creating a duplicate
+— the same pattern as `Sale.clientId`, guarding against a retried request whose earlier response was
+lost after the create actually succeeded.
 
 ### DELETE `/api/products/:id`
 
@@ -150,10 +157,15 @@ Response `200`:
 | `quantityDelta` | integer, ≠ 0 | yes | signed; positive adds stock, negative removes it |
 | `reason` | enum: `RECEIVED_STOCK`, `DAMAGE`, `THEFT_LOSS`, `RECOUNT`, `MANUAL_CORRECTION` | yes | |
 | `notes` | string | no | |
+| `clientId` | string | no | idempotency key — see below |
 
 Runs in a transaction: creates the `StockAdjustment` audit row and applies `quantityDelta` to
 `Product.stockQty` atomically. `404` if the product isn't in the caller's store. Response `201`: the
 created `StockAdjustment`.
+
+**Idempotency**: unlike the product PUT above, this *increments* `stockQty` rather than overwriting it,
+so it isn't naturally safe to retry. `clientId` is set when an adjustment is queued offline; if one with
+that `clientId` already exists, it's returned as-is with `200` instead of applying the delta twice.
 
 ### GET `/api/products/:id/adjustments`
 

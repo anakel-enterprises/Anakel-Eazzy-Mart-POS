@@ -1,23 +1,14 @@
-import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { getCached } from "../lib/cachedFetch";
+import { isApiReachable } from "../lib/api";
+import { localDb, type CachedProduct } from "../db/localDb";
+import { queueProductCreate, refreshProductCache } from "../lib/sync";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 import { BarcodeLabel } from "../components/BarcodeLabel";
 import { ProductDetailModal } from "../components/ProductDetailModal";
 import { ImportProductsModal } from "../components/ImportProductsModal";
-
-interface Product {
-  id: string;
-  name: string;
-  sku: string;
-  barcode: string | null;
-  price: string | number;
-  cost: string | number | null;
-  stockQty: number;
-  lowStockThreshold: number;
-  categoryId: string | null;
-  category: { name: string } | null;
-}
 
 interface Category {
   id: string;
@@ -52,7 +43,27 @@ const emptyForm = {
 };
 
 export function Inventory() {
-  const [products, setProducts] = useState<Product[]>([]);
+  // Reactive local cache, not a live API call — this is what makes Inventory
+  // work offline at all. Every write (add, edit, stock adjustment) lands
+  // here first (see lib/sync.ts), so this table always reflects this
+  // device's most current view, synced or not, with no polling.
+  const products = useLiveQuery(() => localDb.products.orderBy("name").toArray(), [], []);
+  const pendingCreates = useLiveQuery(
+    () => localDb.pendingProducts.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+  const pendingEdits = useLiveQuery(
+    () => localDb.pendingProductEdits.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+  const pendingAdjustments = useLiveQuery(
+    () => localDb.pendingStockAdjustments.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+
   const [categories, setCategories] = useState<Category[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -60,7 +71,7 @@ export function Inventory() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showLabels, setShowLabels] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+  const [detailProduct, setDetailProduct] = useState<CachedProduct | null>(null);
   // Tracks whether the user has hand-edited the SKU, so typing the name
   // keeps auto-generating it until they intentionally override it.
   const [skuTouched, setSkuTouched] = useState(false);
@@ -82,45 +93,69 @@ export function Inventory() {
     });
   }
 
-  async function load() {
-    const [p, c] = await Promise.all([api.get<Product[]>("/api/products"), api.get<Category[]>("/api/categories")]);
-    setProducts(p);
-    setCategories(c);
-  }
-
   useEffect(() => {
-    void load();
+    void isApiReachable().then((reachable) => {
+      if (reachable) void refreshProductCache();
+    });
+    // Categories are read-only from this screen (there's no "add category"
+    // flow), so a simple cache-with-fallback is enough — no need for the
+    // richer reactive queue the products themselves use.
+    void getCached<Category[]>("/api/categories")
+      .then((res) => setCategories(res.data))
+      .catch(() => setCategories([]));
   }, []);
+
+  const pendingProductIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of pendingCreates) ids.add(p.clientId);
+    for (const e of pendingEdits) ids.add(e.productId);
+    for (const a of pendingAdjustments) ids.add(a.productId);
+    return ids;
+  }, [pendingCreates, pendingEdits, pendingAdjustments]);
+
+  const pendingCount = pendingCreates.length + pendingEdits.length + pendingAdjustments.length;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    try {
-      await api.post("/api/products", {
-        name: form.name,
-        sku: form.sku,
-        barcode: form.barcode || undefined,
-        categoryId: form.categoryId || undefined,
-        price: Number(form.price),
-        wholesalePrice: form.wholesalePrice ? Number(form.wholesalePrice) : undefined,
-        vipPrice: form.vipPrice ? Number(form.vipPrice) : undefined,
-        cost: form.cost ? Number(form.cost) : undefined,
-        stockQty: Number(form.stockQty) || 0,
-        lowStockThreshold: Number(form.lowStockThreshold) || 5,
-      });
-      setForm(emptyForm);
-      setSkuTouched(false);
-      setShowForm(false);
-      await load();
-    } catch {
-      setError("Couldn't save product — check the fields and try again.");
+
+    const priceNum = Number(form.price);
+    if (!form.name.trim() || !form.sku.trim() || !Number.isFinite(priceNum) || priceNum <= 0) {
+      setError("Enter a product name, SKU, and a valid selling price.");
+      return;
     }
+
+    const categoryName = form.categoryId ? categories.find((c) => c.id === form.categoryId)?.name ?? null : null;
+
+    await queueProductCreate({
+      name: form.name.trim(),
+      sku: form.sku.trim(),
+      barcode: form.barcode.trim() || undefined,
+      categoryId: form.categoryId || undefined,
+      categoryName,
+      price: priceNum,
+      wholesalePrice: form.wholesalePrice ? Number(form.wholesalePrice) : undefined,
+      vipPrice: form.vipPrice ? Number(form.vipPrice) : undefined,
+      cost: form.cost ? Number(form.cost) : undefined,
+      stockQty: Number(form.stockQty) || 0,
+      lowStockThreshold: Number(form.lowStockThreshold) || 5,
+    });
+    setForm(emptyForm);
+    setSkuTouched(false);
+    setShowForm(false);
   }
 
   return (
     <>
       <Topbar title="Inventory" subtitle={`${products.length} products`} />
       <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 sm:p-6 lg:p-8">
+        {pendingCount > 0 && (
+          <div className="rounded-lg bg-brand-accent/10 px-3 py-2 text-sm font-medium text-brand-accentText">
+            Includes {pendingCount} product change{pendingCount === 1 ? "" : "s"} made on this device that {pendingCount === 1 ? "hasn't" : "haven't"}{" "}
+            synced yet — they'll finish syncing automatically once you're back online.
+          </div>
+        )}
+
         <div className="flex flex-wrap justify-end gap-3">
           <Button variant="secondary" onClick={() => setShowImport(true)}>
             Import products
@@ -147,7 +182,7 @@ export function Inventory() {
 
         {showForm && (
           <Card>
-            <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
+            <form onSubmit={(e) => void handleSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
               <input required placeholder="Name" value={form.name} onChange={(e) => handleNameChange(e.target.value)} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <input
                 required
@@ -206,11 +241,21 @@ export function Inventory() {
                     onChange={() => toggleSelected(p.id)}
                     className="h-4 w-4"
                   />
-                  <span className="font-semibold text-brand-ink">{p.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5 font-semibold text-brand-ink">
+                    <span className="truncate">{p.name}</span>
+                    {pendingProductIds.has(p.id) && (
+                      <span
+                        title="Not yet synced to the server"
+                        className="shrink-0 rounded-full bg-brand-accent/20 px-1.5 py-0.5 text-[10px] font-bold text-brand-accentText"
+                      >
+                        SYNCING
+                      </span>
+                    )}
+                  </span>
                   <span className="text-brand-inkMuted">{p.sku}</span>
-                  <span className="text-brand-inkMuted">{p.category?.name ?? "—"}</span>
-                  <span>{currencyFmt.format(Number(p.price))}</span>
-                  <span className="text-brand-inkMuted">{p.cost != null ? currencyFmt.format(Number(p.cost)) : "—"}</span>
+                  <span className="text-brand-inkMuted">{p.categoryName ?? "—"}</span>
+                  <span>{currencyFmt.format(p.price)}</span>
+                  <span className="text-brand-inkMuted">{p.cost != null ? currencyFmt.format(p.cost) : "—"}</span>
                   <span className={p.stockQty <= p.lowStockThreshold ? "font-bold text-brand-warn" : ""}>
                     {p.stockQty < 0 ? `${p.stockQty} (backorder)` : p.stockQty}
                   </span>
@@ -232,7 +277,7 @@ export function Inventory() {
               {products
                 .filter((p) => selectedIds.has(p.id))
                 .map((p) => (
-                  <BarcodeLabel key={p.id} value={p.barcode || p.sku} name={p.name} price={currencyFmt.format(Number(p.price))} />
+                  <BarcodeLabel key={p.id} value={p.barcode || p.sku} name={p.name} price={currencyFmt.format(p.price)} />
                 ))}
             </div>
           </Card>
@@ -244,11 +289,13 @@ export function Inventory() {
           product={detailProduct}
           categories={categories}
           onClose={() => setDetailProduct(null)}
-          onSaved={() => void load()}
+          onSaved={() => {}}
         />
       )}
 
-      {showImport && <ImportProductsModal onClose={() => setShowImport(false)} onImported={() => void load()} />}
+      {showImport && (
+        <ImportProductsModal onClose={() => setShowImport(false)} onImported={() => void refreshProductCache()} />
+      )}
     </>
   );
 }

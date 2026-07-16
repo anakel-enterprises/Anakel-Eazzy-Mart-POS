@@ -184,6 +184,10 @@ model Product {
   active            Boolean   @default(true)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+  // Idempotency key for a product created offline and retried on sync — see
+  // clientId on Sale for the same pattern. Null for products created online,
+  // which have no retry-a-lost-response risk worth guarding against.
+  clientId          String?   @unique
 
   saleItems        SaleItem[]
   stockAdjustments StockAdjustment[]
@@ -319,6 +323,11 @@ model StockAdjustment {
   quantityDelta Int
   notes         String?
   createdAt     DateTime              @default(now())
+  // Idempotency key for an adjustment queued offline and retried on sync —
+  // without this, retrying a dropped-response POST would double-apply the
+  // delta (unlike a full-overwrite PUT, incrementing stock isn't naturally
+  // safe to repeat).
+  clientId      String?               @unique
 
   @@index([storeId])
   @@index([productId])

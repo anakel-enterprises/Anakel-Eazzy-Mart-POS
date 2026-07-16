@@ -6,6 +6,7 @@ export interface CachedProduct {
   name: string;
   sku: string;
   barcode: string | null;
+  categoryId: string | null;
   categoryName: string | null;
   price: number;
   cost: number | null;
@@ -88,12 +89,73 @@ export interface OfflineCredential {
   updatedAt: string;
 }
 
+// A product created offline, queued for POST /api/products. Its `clientId`
+// doubles as the product's `id` in the `products` cache until it syncs (see
+// newLocalProductId/isLocalProductId) — that's what lets it show up and be
+// sellable at Checkout immediately, with no separate "unsynced products"
+// overlay to merge in.
+export interface PendingProduct {
+  clientId: string;
+  name: string;
+  sku: string;
+  barcode?: string;
+  categoryId?: string;
+  categoryName?: string | null;
+  price: number;
+  wholesalePrice?: number;
+  vipPrice?: number;
+  cost?: number;
+  stockQty: number;
+  lowStockThreshold: number;
+  createdAt: string;
+  syncStatus: SyncStatus;
+  syncError?: string;
+}
+
+// An edit to a product that already has a real server id, queued for PUT
+// /api/products/:id. Keyed by productId (not a generated clientId) so a
+// second edit made before the first has synced simply overwrites this row —
+// only the latest field values matter, same as the PUT itself. Editing a
+// product that's still only a PendingProduct (no server id yet) never
+// creates one of these — it patches that PendingProduct row directly
+// instead, since there's nothing to PUT against until it exists server-side.
+export interface PendingProductEdit {
+  productId: string;
+  name?: string;
+  categoryId?: string | null;
+  price?: number;
+  cost?: number;
+  lowStockThreshold?: number;
+  updatedAt: string;
+  syncStatus: SyncStatus;
+  syncError?: string;
+}
+
+// A stock adjustment against a product that already has a real server id,
+// queued for POST /api/products/:id/adjustments. Unlike PendingProductEdit,
+// each one is its own row (not coalesced by productId) — the server keeps a
+// StockAdjustment audit trail of individual events, so two offline restocks
+// of +50 and -3 need to arrive as two rows, not a single net +47.
+export interface PendingStockAdjustment {
+  clientId: string;
+  productId: string;
+  quantityDelta: number;
+  reason: "RECEIVED_STOCK" | "DAMAGE" | "THEFT_LOSS" | "RECOUNT" | "MANUAL_CORRECTION";
+  notes?: string;
+  createdAt: string;
+  syncStatus: SyncStatus;
+  syncError?: string;
+}
+
 class LocalDb extends Dexie {
   products!: Table<CachedProduct, string>;
   pendingSales!: Table<PendingSale, string>;
   heldSales!: Table<HeldSale, string>;
   apiCache!: Table<CachedApiResponse, string>;
   offlineCredentials!: Table<OfflineCredential, string>;
+  pendingProducts!: Table<PendingProduct, string>;
+  pendingProductEdits!: Table<PendingProductEdit, string>;
+  pendingStockAdjustments!: Table<PendingStockAdjustment, string>;
 
   constructor() {
     super("anakel-pos");
@@ -119,6 +181,16 @@ class LocalDb extends Dexie {
       apiCache: "url",
       offlineCredentials: "email",
     });
+    this.version(5).stores({
+      products: "id, name, sku, barcode",
+      pendingSales: "clientId, syncStatus, createdAt",
+      heldSales: "id, createdAt",
+      apiCache: "url",
+      offlineCredentials: "email",
+      pendingProducts: "clientId, syncStatus, createdAt",
+      pendingProductEdits: "productId, syncStatus, updatedAt",
+      pendingStockAdjustments: "clientId, productId, syncStatus, createdAt",
+    });
   }
 }
 
@@ -126,4 +198,19 @@ export const localDb = new LocalDb();
 
 export function newClientId(): string {
   return `${Date.now()}-${crypto.randomUUID()}`;
+}
+
+// Prefix marks an id as not-yet-synced to the server — a product created
+// offline is stored (and sold, and edited) under this id from the moment
+// it's added until its create actually reaches the server, at which point
+// every reference to it is rewritten to the real server id (see
+// remapLocalProductId in lib/sync.ts).
+const LOCAL_PRODUCT_ID_PREFIX = "local_";
+
+export function newLocalProductId(): string {
+  return `${LOCAL_PRODUCT_ID_PREFIX}${newClientId()}`;
+}
+
+export function isLocalProductId(id: string): boolean {
+  return id.startsWith(LOCAL_PRODUCT_ID_PREFIX);
 }

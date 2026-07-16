@@ -46,6 +46,12 @@ const productSchema = z.object({
   stockQty: z.number().int().nonnegative().default(0),
   lowStockThreshold: z.number().int().nonnegative().default(5),
   imageUrl: z.string().optional(),
+  // Set when a product is created offline — lets a retried sync (e.g. after
+  // a dropped response to a create that actually succeeded) return the
+  // already-created product instead of failing on the unique SKU/clientId
+  // constraint or creating a duplicate. See clientId on Sale for the same
+  // pattern.
+  clientId: z.string().optional(),
 });
 
 productsRouter.post(
@@ -53,6 +59,15 @@ productsRouter.post(
   requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const data = productSchema.parse(req.body);
+
+    if (data.clientId) {
+      const existing = await prisma.product.findUnique({ where: { clientId: data.clientId } });
+      if (existing && existing.storeId === req.auth!.storeId) {
+        res.status(200).json(existing);
+        return;
+      }
+    }
+
     const product = await prisma.product.create({
       data: { ...data, storeId: req.auth!.storeId },
     });
@@ -209,6 +224,11 @@ const adjustmentSchema = z.object({
   quantityDelta: z.number().int().refine((v) => v !== 0, "quantityDelta cannot be 0"),
   reason: z.enum(["RECEIVED_STOCK", "DAMAGE", "THEFT_LOSS", "RECOUNT", "MANUAL_CORRECTION"]),
   notes: z.string().optional(),
+  // Set when an adjustment is queued offline — unlike the product PUT above,
+  // this increments stockQty rather than overwriting it, so a retried sync
+  // (after a dropped response to a POST that actually succeeded) would
+  // otherwise double-apply the delta. See clientId on Sale for the pattern.
+  clientId: z.string().optional(),
 });
 
 productsRouter.post(
@@ -216,6 +236,15 @@ productsRouter.post(
   requirePermission("MANAGE_PRODUCTS"),
   asyncHandler(async (req, res) => {
     const data = adjustmentSchema.parse(req.body);
+
+    if (data.clientId) {
+      const existing = await prisma.stockAdjustment.findUnique({ where: { clientId: data.clientId } });
+      if (existing && existing.storeId === req.auth!.storeId) {
+        res.status(200).json(existing);
+        return;
+      }
+    }
+
     const product = await prisma.product.findFirst({
       where: { id: req.params.id, storeId: req.auth!.storeId },
     });
@@ -233,6 +262,7 @@ productsRouter.post(
           reason: data.reason,
           quantityDelta: data.quantityDelta,
           notes: data.notes,
+          clientId: data.clientId,
         },
       }),
       prisma.product.update({

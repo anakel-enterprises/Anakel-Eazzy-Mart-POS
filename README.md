@@ -89,5 +89,7 @@ product catalog is cached locally on login and refreshed whenever the app comes 
 and every Reports tab show this device's last-known figures while offline, live-adjusted the moment a
 sale is rung up on this device — so totals, trends, and stock levels update instantly, offline or on,
 before a sync ever happens — with a clear banner and an automatic refresh once connectivity returns.
-Full detail in
+Inventory works offline too — adding a product, editing one, and adjusting stock all queue locally and
+sync the same way as a sale, and a product added offline is immediately searchable and sellable at
+Checkout even before its own sync has completed. Full detail in
 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#offline-first--sync-architecture).

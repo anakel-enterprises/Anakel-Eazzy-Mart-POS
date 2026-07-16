@@ -197,8 +197,9 @@ Constraints: `@@unique([storeId, name])`, index `[storeId]`.
 | `imageUrl` | String? | |
 | `active` | Boolean | default `true` — **soft delete flag**; `DELETE /api/products/:id` sets this rather than removing the row |
 | `createdAt` / `updatedAt` | DateTime | |
+| `clientId` | String? | idempotency key for a product created offline — see [API.md](./API.md#post-apiproducts--put-apiproductsid) |
 
-Constraints: `@@unique([storeId, sku])`, indexes `[storeId]`, `[storeId, barcode]`.
+Constraints: `@@unique([storeId, sku])`, `@@unique([clientId])`, indexes `[storeId]`, `[storeId, barcode]`.
 
 ### Sale
 
@@ -317,8 +318,9 @@ loss, recount, etc.).
 | `quantityDelta` | Int | signed; applied to `Product.stockQty` in the same transaction |
 | `notes` | String? | |
 | `createdAt` | DateTime | default now |
+| `clientId` | String? | idempotency key for an adjustment queued offline — see [API.md](./API.md#post-apiproductsidadjustments) |
 
-Indexes: `[storeId]`, `[productId]`.
+Constraints: `@@unique([clientId])`. Indexes: `[storeId]`, `[productId]`.
 
 ### Customer
 
