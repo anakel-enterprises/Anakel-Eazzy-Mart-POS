@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth, type AuthUser } from "./context/AuthContext";
 import { Layout } from "./components/Layout";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Checkout } from "./pages/Checkout";
@@ -60,6 +61,7 @@ function AppRoutes() {
 export function App() {
   return (
     <AuthProvider>
+      <UpdateBanner />
       <AppRoutes />
     </AuthProvider>
   );

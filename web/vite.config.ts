@@ -6,7 +6,13 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: "autoUpdate",
+      // "prompt" (not "autoUpdate") deliberately leaves a newly-downloaded
+      // service worker waiting instead of silently activating it — this app
+      // registers it manually (see lib/swUpdate.ts) so a cashier with an
+      // in-progress cart controls exactly when the page reloads to pick up
+      // the new version, rather than having it swapped out from under them.
+      registerType: "prompt",
+      injectRegister: false,
       includeAssets: ["icons/icon-192.png", "icons/icon-512.png", "apple-touch-icon.png", "favicon.png"],
       manifest: {
         name: "Anakel Eazzy Mart POS",

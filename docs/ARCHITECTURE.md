@@ -564,11 +564,48 @@ only different env var values. See [DEPLOYMENT.md](./DEPLOYMENT.md#m-pesa-daraja
 ## PWA / service worker
 
 Configured via `vite-plugin-pwa` in `web/vite.config.ts`, `generateSW` mode with `registerType:
-"autoUpdate"`. `navigateFallback: "/index.html"` keeps the app shell loadable offline. Runtime caching:
-API calls (`/api/*`) are explicitly `NetworkOnly` — the service worker plays no role in offline data,
-that's entirely the Dexie/sync layer's job — while Google Fonts assets use
-`StaleWhileRevalidate`/`CacheFirst`. Manifest: `Anakel Eazzy Mart POS`, standalone display,
-`theme_color`/`background_color` `#173a2a`, 192/512px icons in both `any` and `maskable` purposes.
+"prompt"` and `injectRegister: false` (registration is done manually — see below). `navigateFallback:
+"/index.html"` keeps the app shell loadable offline. Runtime caching: API calls (`/api/*`) are explicitly
+`NetworkOnly` — the service worker plays no role in offline data, that's entirely the Dexie/sync layer's
+job — while Google Fonts assets use `StaleWhileRevalidate`/`CacheFirst`. Manifest: `Anakel Eazzy Mart
+POS`, standalone display, `theme_color`/`background_color` `#173a2a`, 192/512px icons in both `any` and
+`maskable` purposes.
+
+### Keeping an installed device up to date
+
+An installed PWA that's just resumed from Android's app switcher — the normal way a cashier "opens" it
+day to day — doesn't necessarily do a real page navigation, and a browser only checks the network for a
+new service worker on navigation. Left alone, a device can install this app once and then run whatever
+build was current that day indefinitely, even after many deploys, because nothing ever prompts it to
+check again. This is what was behind an early real report: a phone with the app installed showed empty
+Inventory/Dashboard data while the same URL in a normal browser tab on the same phone worked fine — the
+installed instance was simply stuck on a stale build from before a wave of fixes.
+
+`web/src/lib/swUpdate.ts` (wired up once in `main.tsx`) fixes this:
+
+- Registers the service worker itself via `vite-plugin-pwa`'s `virtual:pwa-register` module
+  (`registerSW()`), rather than the plugin's auto-injected script — `injectRegister: false` above turns
+  that auto-injection off so there's only one registration path.
+- `registerType: "prompt"` means a newly-downloaded service worker installs and then **waits** instead of
+  activating itself immediately — the generated `sw.js` only calls `self.skipWaiting()` in response to an
+  explicit `"SKIP_WAITING"` message, not automatically. This matters for a POS: an in-progress cart lives
+  only in Checkout's React state, so silently swapping the running JS out from under a cashier mid-sale
+  (which `registerType: "autoUpdate"`'s automatic `skipWaiting()` + `clientsClaim()` would do) risks losing
+  it. Leaving the decision to the user avoids that.
+- Since the browser won't reliably re-check on its own, `initServiceWorkerUpdates()` forces a check itself
+  — polling `registration.update()` every 15 minutes, and again immediately whenever the tab/app comes
+  back to the foreground (`visibilitychange` → `"visible"`, which is exactly the "resumed from the app
+  switcher" moment that a bare navigation-triggered check would miss).
+- When `registerSW()`'s `onNeedRefresh` fires (a new worker is installed and waiting), a small module-level
+  store flips to "update available" and `<UpdateBanner />` (rendered once at the app root in `App.tsx`, so
+  it shows regardless of which page is open) appears as a fixed bar reading "A new version of this app is
+  available" with a "Refresh now" button. Clicking it calls the `updateSW(true)` closure `registerSW()`
+  returned, which posts `SKIP_WAITING` to the waiting worker and reloads once it takes control.
+
+Verified end-to-end with Playwright against a `vite preview` build: load the app (service worker installs
+and, after a second navigation, takes control), rebuild `dist/` in place to simulate a new deploy without
+restarting the server, force an update check, confirm the banner appears, click "Refresh now", and confirm
+the page reloads cleanly onto the new build with the session still intact.
 
 ## Design system
 
