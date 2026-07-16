@@ -232,6 +232,7 @@ keeps working with no connectivity.
 | `pendingProducts` | Added in schema v5. The offline product-create queue, one row per `queueProductCreate()` call, keyed by a local-only `clientId` that also doubles as the product's `id` in `products` until it syncs. See [Offline product management](#offline-product-management). |
 | `pendingProductEdits` | Added in schema v5. The offline product-edit queue for products that already have a real server id — keyed by `productId`, so a second edit before the first syncs just overwrites the row (latest wins). |
 | `pendingStockAdjustments` | Added in schema v5. The offline stock-adjustment queue for products that already have a real server id — one row per adjustment (not coalesced), mirroring the server's `StockAdjustment` audit trail. |
+| `pendingProductDeletes` | Added in schema v6. The offline product-delete queue for products that already have a real server id, keyed by `productId`. |
 
 ### Sync engine (`web/src/lib/sync.ts`)
 
@@ -324,13 +325,23 @@ product edit (a `PUT`, safe to resend), a stock adjustment increments `stockQty`
 it, so `POST /api/products/:id/adjustments` also accepts an optional `clientId` for the same
 retry-safety reason as `Sale`/`Product`.
 
+**Deleting a product** (`queueProductDelete()`): removes the cached row immediately either way, so the
+product disappears from Inventory/Checkout right away regardless of connectivity. A product that's still
+only a `pendingProducts` row is simply cancelled outright — its create, any queued edit, and any queued
+stock adjustment are all deleted locally, and nothing is ever sent to the server, since the server has
+never heard of the product. A product with a real server id instead queues a `pendingProductDeletes` row
+and drops any not-yet-synced edit/adjustment for it (no point syncing a change to a product about to be
+deleted); `DELETE /api/products/:id` is a soft delete (`Product.active = false`), which is already
+naturally safe to resend, so unlike `Product`/`StockAdjustment` this queue needs no `clientId`.
+
 **Flush ordering**: `flushPendingSales()` always calls `flushPendingProducts()` first, before reading its
 own queue — a sale referencing a brand-new local product would otherwise risk reaching the server before
-that product's create has, and get rejected as an unknown product. All four flush functions
-(`flushPendingSales`, `flushPendingProducts`, `flushPendingProductEdits`, `flushPendingStockAdjustments`)
-share one in-flight-promise pattern: a call made while one is already running returns *that* run's result
-instead of a stale no-op, so the background timer, the `online` listener, and a direct call from
-`queueSale`/`queueProductCreate` firing within milliseconds of each other never silently skip work.
+that product's create has, and get rejected as an unknown product. All five flush functions
+(`flushPendingSales`, `flushPendingProducts`, `flushPendingProductEdits`, `flushPendingStockAdjustments`,
+`flushPendingProductDeletes`) share one in-flight-promise pattern: a call made while one is already
+running returns *that* run's result instead of a stale no-op, so the background timer, the `online`
+listener, and a direct call from `queueSale`/`queueProductCreate` firing within milliseconds of each
+other never silently skip work.
 
 **Gap**: Reports' Inventory tab and the P&L/Analytics COGS estimates are driven by the server's own
 report endpoints, cached via `getCached()` — they reflect a product added or edited on this device only

@@ -65,6 +65,7 @@ export function Inventory() {
   );
 
   const [categories, setCategories] = useState<Category[]>([]);
+  const [query, setQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +116,18 @@ export function Inventory() {
 
   const pendingCount = pendingCreates.length + pendingEdits.length + pendingAdjustments.length;
 
+  const filteredProducts = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.barcode?.toLowerCase().includes(q) ?? false) ||
+        (p.categoryName?.toLowerCase().includes(q) ?? false)
+    );
+  }, [products, query]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -156,28 +169,36 @@ export function Inventory() {
           </div>
         )}
 
-        <div className="flex flex-wrap justify-end gap-3">
-          <Button variant="secondary" onClick={() => setShowImport(true)}>
-            Import products
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => setShowLabels((v) => !v)}
-            disabled={selectedIds.size === 0}
-          >
-            Print barcodes ({selectedIds.size})
-          </Button>
-          <Button
-            onClick={() => {
-              if (showForm) {
-                setForm(emptyForm);
-                setSkuTouched(false);
-              }
-              setShowForm((v) => !v);
-            }}
-          >
-            {showForm ? "Cancel" : "Add product"}
-          </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name, SKU, barcode, or category"
+            className="min-w-[220px] flex-1 rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
+          />
+          <div className="flex flex-wrap justify-end gap-3">
+            <Button variant="secondary" onClick={() => setShowImport(true)}>
+              Import products
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setShowLabels((v) => !v)}
+              disabled={selectedIds.size === 0}
+            >
+              Print barcodes ({selectedIds.size})
+            </Button>
+            <Button
+              onClick={() => {
+                if (showForm) {
+                  setForm(emptyForm);
+                  setSkuTouched(false);
+                }
+                setShowForm((v) => !v);
+              }}
+            >
+              {showForm ? "Cancel" : "Add product"}
+            </Button>
+          </div>
         </div>
 
         {showForm && (
@@ -228,7 +249,7 @@ export function Inventory() {
                 <span>COST</span>
                 <span>STOCK</span>
               </div>
-              {products.map((p) => (
+              {filteredProducts.map((p) => (
                 <div
                   key={p.id}
                   onClick={() => setDetailProduct(p)}
@@ -261,7 +282,11 @@ export function Inventory() {
                   </span>
                 </div>
               ))}
-              {products.length === 0 && <div className="py-6 text-sm text-brand-inkMuted">No products yet.</div>}
+              {filteredProducts.length === 0 && (
+                <div className="py-6 text-sm text-brand-inkMuted">
+                  {products.length === 0 ? "No products yet." : "No products match your search."}
+                </div>
+              )}
             </div>
           </div>
           <div className="pt-3 text-xs text-brand-inkMuted">Tap a product to edit its details, price, or stock.</div>

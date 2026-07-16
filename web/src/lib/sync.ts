@@ -436,6 +436,85 @@ async function doFlushPendingStockAdjustments(): Promise<{ synced: number; faile
   return { synced, failed };
 }
 
+// Deleting a product goes through this queue, online or offline, same as
+// every other Inventory write. A product that's still only a
+// PendingProduct (its own create hasn't synced yet) is simply cancelled —
+// there's nothing server-side to delete yet — along with any edit or stock
+// adjustment still queued against it. A product that already has a real
+// server id is removed from the local cache immediately (so it disappears
+// from Inventory/Checkout right away) and queues a DELETE, which the server
+// applies as a soft delete; any not-yet-synced edit or adjustment for it is
+// dropped too, since there's no point syncing a change to a product that's
+// about to be deleted.
+export async function queueProductDelete(productId: string): Promise<void> {
+  if (isLocalProductId(productId)) {
+    await localDb.transaction(
+      "rw",
+      localDb.products,
+      localDb.pendingProducts,
+      localDb.pendingProductEdits,
+      localDb.pendingStockAdjustments,
+      async () => {
+        await localDb.products.delete(productId);
+        await localDb.pendingProducts.delete(productId);
+        await localDb.pendingProductEdits.delete(productId);
+        await localDb.pendingStockAdjustments.where("productId").equals(productId).delete();
+      }
+    );
+    return;
+  }
+
+  await localDb.transaction(
+    "rw",
+    localDb.products,
+    localDb.pendingProductEdits,
+    localDb.pendingStockAdjustments,
+    localDb.pendingProductDeletes,
+    async () => {
+      await localDb.products.delete(productId);
+      await localDb.pendingProductEdits.delete(productId);
+      await localDb.pendingStockAdjustments.where("productId").equals(productId).delete();
+      await localDb.pendingProductDeletes.put({ productId, createdAt: new Date().toISOString(), syncStatus: "pending" });
+    }
+  );
+
+  void flushPendingProductDeletes();
+}
+
+let productDeletesFlushInFlight: Promise<{ synced: number; failed: number }> | null = null;
+
+export function flushPendingProductDeletes(): Promise<{ synced: number; failed: number }> {
+  if (productDeletesFlushInFlight) return productDeletesFlushInFlight;
+  productDeletesFlushInFlight = doFlushPendingProductDeletes().finally(() => {
+    productDeletesFlushInFlight = null;
+  });
+  return productDeletesFlushInFlight;
+}
+
+// No idempotency key needed here — DELETE /api/products/:id sets
+// Product.active = false, which is already safe to apply twice.
+async function doFlushPendingProductDeletes(): Promise<{ synced: number; failed: number }> {
+  let synced = 0;
+  let failed = 0;
+
+  if (!(await isApiReachable())) return { synced: 0, failed: 0 };
+
+  const pending = await localDb.pendingProductDeletes.where("syncStatus").anyOf("pending", "error").toArray();
+  for (const d of pending) {
+    try {
+      await api.delete(`/api/products/${d.productId}`);
+      await localDb.pendingProductDeletes.update(d.productId, { syncStatus: "synced" });
+      synced++;
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Network error";
+      await localDb.pendingProductDeletes.update(d.productId, { syncStatus: "error", syncError: message });
+      failed++;
+    }
+  }
+
+  return { synced, failed };
+}
+
 const RETRY_INTERVAL_MS = 25_000;
 const CACHE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
@@ -450,6 +529,7 @@ export function startBackgroundSync(): () => void {
     void flushPendingProducts();
     void flushPendingProductEdits();
     void flushPendingStockAdjustments();
+    void flushPendingProductDeletes();
   };
   window.addEventListener("online", onlineHandler);
 
@@ -459,6 +539,7 @@ export function startBackgroundSync(): () => void {
     void flushPendingProducts();
     void flushPendingProductEdits();
     void flushPendingStockAdjustments();
+    void flushPendingProductDeletes();
     const now = Date.now();
     if (now - lastCacheRefresh > CACHE_REFRESH_INTERVAL_MS) {
       lastCacheRefresh = now;

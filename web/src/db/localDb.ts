@@ -147,6 +147,19 @@ export interface PendingStockAdjustment {
   syncError?: string;
 }
 
+// A delete of a product that already has a real server id, queued for
+// DELETE /api/products/:id (a soft delete server-side). Keyed by productId —
+// there's only ever one meaningful delete per product. A product that's
+// still only a PendingProduct never creates one of these: deleting it just
+// cancels the pending create locally (see queueProductDelete), since the
+// server has never heard of it.
+export interface PendingProductDelete {
+  productId: string;
+  createdAt: string;
+  syncStatus: SyncStatus;
+  syncError?: string;
+}
+
 class LocalDb extends Dexie {
   products!: Table<CachedProduct, string>;
   pendingSales!: Table<PendingSale, string>;
@@ -156,6 +169,7 @@ class LocalDb extends Dexie {
   pendingProducts!: Table<PendingProduct, string>;
   pendingProductEdits!: Table<PendingProductEdit, string>;
   pendingStockAdjustments!: Table<PendingStockAdjustment, string>;
+  pendingProductDeletes!: Table<PendingProductDelete, string>;
 
   constructor() {
     super("anakel-pos");
@@ -190,6 +204,17 @@ class LocalDb extends Dexie {
       pendingProducts: "clientId, syncStatus, createdAt",
       pendingProductEdits: "productId, syncStatus, updatedAt",
       pendingStockAdjustments: "clientId, productId, syncStatus, createdAt",
+    });
+    this.version(6).stores({
+      products: "id, name, sku, barcode",
+      pendingSales: "clientId, syncStatus, createdAt",
+      heldSales: "id, createdAt",
+      apiCache: "url",
+      offlineCredentials: "email",
+      pendingProducts: "clientId, syncStatus, createdAt",
+      pendingProductEdits: "productId, syncStatus, updatedAt",
+      pendingStockAdjustments: "clientId, productId, syncStatus, createdAt",
+      pendingProductDeletes: "productId, syncStatus, createdAt",
     });
   }
 }

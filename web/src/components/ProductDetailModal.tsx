@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { isLocalProductId } from "../db/localDb";
-import { patchPendingProduct, queueProductEdit, queueStockAdjustment } from "../lib/sync";
+import { patchPendingProduct, queueProductDelete, queueProductEdit, queueStockAdjustment } from "../lib/sync";
 import { Button, Card } from "./ui";
 
 export interface ProductDetail {
@@ -40,6 +40,7 @@ export function ProductDetailModal({
   // — not the new absolute total. Starts at 0 so Save is a no-op by default.
   const [delta, setDelta] = useState("0");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const deltaNum = Math.trunc(Number(delta)) || 0;
@@ -95,6 +96,17 @@ export function ProductDetailModal({
     }
 
     setSaving(false);
+    onSaved();
+    onClose();
+  }
+
+  async function handleDelete() {
+    if (!window.confirm(`Delete "${product.name}"? It will no longer show up in Inventory or be sellable at Checkout.`)) {
+      return;
+    }
+    setDeleting(true);
+    await queueProductDelete(product.id);
+    setDeleting(false);
     onSaved();
     onClose();
   }
@@ -183,11 +195,22 @@ export function ProductDetailModal({
           {error && <div className="text-sm font-medium text-brand-warn">{error}</div>}
 
           <div className="mt-1 flex gap-2">
-            <Button variant="secondary" className="flex-1" onClick={onClose} disabled={saving}>
+            <Button variant="secondary" className="flex-1" onClick={onClose} disabled={saving || deleting}>
               Cancel
             </Button>
-            <Button className="flex-1" onClick={() => void handleSave()} disabled={saving}>
+            <Button className="flex-1" onClick={() => void handleSave()} disabled={saving || deleting}>
               {saving ? "Saving…" : "Save changes"}
+            </Button>
+          </div>
+
+          <div className="mt-1 border-t border-brand-border pt-3">
+            <Button
+              variant="danger"
+              className="w-full"
+              onClick={() => void handleDelete()}
+              disabled={saving || deleting}
+            >
+              {deleting ? "Deleting…" : "Delete product"}
             </Button>
           </div>
         </div>
