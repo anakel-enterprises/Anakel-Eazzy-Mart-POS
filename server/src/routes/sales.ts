@@ -21,7 +21,7 @@ const splitPaymentSchema = z.object({
 const createSaleSchema = z.object({
   clientId: z.string().min(1),
   items: z.array(saleItemSchema).min(1),
-  paymentMethod: z.enum(["CASH", "MPESA", "CARD", "BANK", "SPLIT", "CREDIT"]),
+  paymentMethod: z.enum(["CASH", "MPESA_MANUAL", "MPESA", "CARD", "BANK", "SPLIT", "CREDIT"]),
   amountTendered: z.number().nonnegative().optional(),
   status: z.enum(["HELD", "COMPLETED"]).default("COMPLETED"),
   createdAt: z.string().datetime().optional(),
@@ -29,10 +29,10 @@ const createSaleSchema = z.object({
   couponCode: z.string().optional(),
   creditDueDate: z.string().datetime().optional(),
   splitPayments: z.array(splitPaymentSchema).optional(),
-  // Required for a standalone MPESA sale — proves a real STK push actually
-  // succeeded for this amount before the sale is allowed to complete. Not
-  // used for SPLIT's MPESA leg, which (like its other legs) is just a
-  // cashier-asserted amount, same as CASH/CARD/BANK in a split.
+  // Required for a standalone MPESA (STK push) sale — proves a real STK
+  // push actually succeeded for this amount before the sale is allowed to
+  // complete. Not used for MPESA_MANUAL, which (like CASH/CARD/BANK) is
+  // just a cashier-asserted amount, nor for SPLIT's MPESA leg, same reason.
   mpesaCheckoutRequestId: z.string().optional(),
 });
 

@@ -24,7 +24,20 @@ interface CustomerOption {
 }
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
-const PAYMENT_METHODS = ["CASH", "MPESA", "CARD", "BANK", "SPLIT", "CREDIT"] as const;
+const PAYMENT_METHODS = ["CASH", "MPESA_MANUAL", "MPESA", "CARD", "BANK", "SPLIT", "CREDIT"] as const;
+// MPESA_MANUAL — customer already paid (e.g. sent to a till/paybill outside
+// this system) and the cashier just records it, same trust level as
+// CASH/CARD/BANK. MPESA — the live STK push flow below, which requires the
+// customer to approve a prompt before the sale can complete.
+const PAYMENT_METHOD_LABELS: Record<(typeof PAYMENT_METHODS)[number], string> = {
+  CASH: "CASH",
+  MPESA_MANUAL: "M-PESA SALE",
+  MPESA: "M-PESA PROMPT",
+  CARD: "CARD",
+  BANK: "BANK",
+  SPLIT: "SPLIT",
+  CREDIT: "CREDIT",
+};
 const SPLIT_METHODS = ["CASH", "MPESA", "CARD", "BANK"] as const;
 type MpesaStatus = "idle" | "sending" | "waiting" | "success" | "failed";
 // Safaricom's own STK prompt expires client-side after roughly a minute if
@@ -114,6 +127,10 @@ export function Checkout() {
     setCart((prev) =>
       quantity <= 0 ? prev.filter((l) => l.product.id !== productId) : prev.map((l) => (l.product.id === productId ? { ...l, quantity } : l))
     );
+  }
+
+  function removeFromCart(productId: string) {
+    setCart((prev) => prev.filter((l) => l.product.id !== productId));
   }
 
   function resetPaymentState() {
@@ -327,6 +344,13 @@ export function Checkout() {
                     >
                       +
                     </button>
+                    <button
+                      onClick={() => removeFromCart(line.product.id)}
+                      aria-label={`Remove ${line.product.name} from cart`}
+                      className="h-7 w-7 rounded-md text-brand-inkMuted hover:bg-white hover:text-brand-warn"
+                    >
+                      ✕
+                    </button>
                   </div>
                 </div>
               ))}
@@ -346,7 +370,7 @@ export function Checkout() {
                   paymentMethod === method ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"
                 }`}
               >
-                {method}
+                {PAYMENT_METHOD_LABELS[method]}
               </button>
             ))}
           </div>
@@ -362,6 +386,13 @@ export function Checkout() {
                 className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
               />
             </label>
+          )}
+
+          {paymentMethod === "MPESA_MANUAL" && (
+            <p className="text-xs text-brand-inkMuted">
+              For a customer who's already paid via M-Pesa outside this system (e.g. to a till or paybill number).
+              Confirm the payment yourself, then complete the sale — no prompt is sent.
+            </p>
           )}
 
           {paymentMethod === "MPESA" && (

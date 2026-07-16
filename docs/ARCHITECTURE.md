@@ -410,11 +410,21 @@ refetch right when the server's own numbers are guaranteed to be current.
 
 ## M-Pesa STK Push integration
 
+Checkout offers two distinct M-Pesa payment methods, chosen at the top of the Payment panel:
+
+- **`MPESA_MANUAL` ("M-Pesa Sale")** — the customer already paid via M-Pesa outside this system (most
+  commonly by sending money directly to a till or paybill number). The cashier confirms the payment
+  themselves and completes the sale exactly like CASH/CARD/BANK — no request is sent to Safaricom, no
+  proof is required server-side, and it works fully offline.
+- **`MPESA` ("M-Pesa Prompt")** — the live STK Push flow described below: the server sends Safaricom a
+  request that pops a PIN prompt on the customer's own phone.
+
 A standalone `MPESA` sale at checkout is backed by a real Safaricom Daraja "Lipa na M-Pesa Online" (STK
 Push) integration, not just a payment-method label. This is the one part of checkout that has **no
 offline path** — sending a PIN prompt to a customer's phone inherently requires connectivity — so it's
 built as a linear online request/poll flow rather than going through the Dexie offline sale queue until
-the payment is confirmed.
+the payment is confirmed. `MPESA_MANUAL` has no such restriction, since it's cashier-asserted like
+CASH/CARD/BANK and never talks to Safaricom.
 
 ```mermaid
 sequenceDiagram
@@ -466,11 +476,11 @@ another sale, and whose amount covers the computed total — the same shortfall-
 split payments, since the push amount is quoted before this request's promotions/coupon are applied. On
 success the transaction is linked to the new sale (`MpesaTransaction.saleId`, unique — this is what
 actually prevents the same STK push being spent on two sales) and its receipt number is copied onto
-`Sale.mpesaReceiptNumber`. `SPLIT`'s MPESA leg is deliberately **not** run through any of this — like its
-other legs (CASH/CARD/BANK), it's just a cashier-asserted amount, consistent with how the rest of split
-payment already works; only a standalone MPESA sale gets real STK verification.
+`Sale.mpesaReceiptNumber`. `MPESA_MANUAL` and `SPLIT`'s MPESA leg are deliberately **not** run through
+any of this — like CASH/CARD/BANK, they're just a cashier-asserted amount; only a standalone STK-push
+`MPESA` sale gets real verification.
 
-**Frontend** (`web/src/pages/Checkout.tsx`): selecting MPESA replaces the normal "Complete sale" button
+**Frontend** (`web/src/pages/Checkout.tsx`): selecting the "M-Pesa Prompt" (`MPESA`) method replaces the normal "Complete sale" button
 with a phone-number field and a "Send M-Pesa request" button. `sendMpesaPush()` is a single async
 function — POST the push, then poll `GET /api/mpesa/stk-push/:checkoutRequestId` every 3 seconds for up
 to 90 seconds — showing "Waiting for the customer to enter their M-Pesa PIN…" while pending. On

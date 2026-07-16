@@ -173,7 +173,7 @@ Lists that product's adjustment history, newest first, each including the acting
 |---|---|---|---|
 | `clientId` | string, min 1 | yes | **idempotency key** — see below |
 | `items` | array of `{ productId, quantity }` (quantity: positive int) | yes | min 1 item |
-| `paymentMethod` | enum `CASH`\|`MPESA`\|`CARD`\|`BANK`\|`SPLIT`\|`CREDIT` | yes | |
+| `paymentMethod` | enum `CASH`\|`MPESA_MANUAL`\|`MPESA`\|`CARD`\|`BANK`\|`SPLIT`\|`CREDIT` | yes | `MPESA_MANUAL` is cashier-asserted (like CASH/CARD/BANK); `MPESA` is STK push-verified — see M-Pesa below |
 | `amountTendered` | number, ≥ 0 | no | |
 | `status` | enum `HELD`\|`COMPLETED` | no | default `COMPLETED` |
 | `createdAt` | ISO datetime string | no | lets an offline sale keep its original timestamp when synced later |
@@ -181,7 +181,7 @@ Lists that product's adjustment history, newest first, each including the acting
 | `couponCode` | string | no | |
 | `creditDueDate` | ISO datetime string | no | CREDIT sales only; defaults to `now + 30 days` |
 | `splitPayments` | array of `{ method: CASH\|MPESA\|CARD\|BANK, amount: positive number }` | no | required (≥2 entries) if `paymentMethod: SPLIT` |
-| `mpesaCheckoutRequestId` | string | no | required if `paymentMethod: MPESA` (standalone, not SPLIT) — see M-Pesa below |
+| `mpesaCheckoutRequestId` | string | no | required if `paymentMethod: MPESA` (standalone STK push, not `MPESA_MANUAL` or `SPLIT`) — see M-Pesa below |
 
 **Idempotency**: this is the endpoint the offline sync queue retries. If a `Sale` with the given
 `clientId` already exists, the request is **not** re-processed — the existing sale is returned as-is
@@ -224,9 +224,10 @@ not already linked to another sale, and whose `amount` covers the total (same sh
 split payments — the STK push amount is quoted before this request's promotions/coupon are known, so it
 only needs to *cover* the total, not match exactly). `400` if the transaction is missing, still
 `PENDING`, `FAILED`/`CANCELLED`, already used, or short. On success, the transaction is linked to the
-new sale and its `mpesaReceiptNumber` is copied onto `Sale.mpesaReceiptNumber`. `SPLIT`'s MPESA leg is
-unaffected by any of this — like its other legs, it's just a cashier-asserted amount, not verified
-against a real STK push.
+new sale and its `mpesaReceiptNumber` is copied onto `Sale.mpesaReceiptNumber`. `MPESA_MANUAL` (the
+customer already paid outside this system — e.g. to a till/paybill — and the cashier is just recording
+it) and `SPLIT`'s MPESA leg are both unaffected by any of this — like CASH/CARD/BANK, they're just a
+cashier-asserted amount, not verified against a real STK push.
 
 **Effects on other tables** (only for `status: COMPLETED`, inside one transaction with the `Sale`
 insert): each item's `Product.stockQty` is decremented; a used coupon's `timesUsed` is incremented; a

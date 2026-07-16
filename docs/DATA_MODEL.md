@@ -127,7 +127,7 @@ erDiagram
 | `ExpenseStatus` | `PENDING`, `APPROVED`, `REJECTED` |
 | `PromotionType` | `PERCENTAGE_DISCOUNT`, `FIXED_DISCOUNT`, `BOGO` |
 | `DiscountType` | `PERCENTAGE`, `FIXED` |
-| `PaymentMethod` | `CASH`, `MPESA`, `CARD`, `BANK`, `SPLIT`, `CREDIT` |
+| `PaymentMethod` | `CASH`, `MPESA_MANUAL`, `MPESA`, `CARD`, `BANK`, `SPLIT`, `CREDIT` — `MPESA_MANUAL` is a cashier-asserted M-Pesa payment (no STK push); `MPESA` is STK push-verified, see API.md |
 | `SaleStatus` | `HELD`, `COMPLETED`, `VOIDED`, `REFUNDED` — note: `VOIDED`/`REFUNDED` exist in the schema but no route currently sets them; there is no void/refund endpoint yet. |
 | `RegisterSessionStatus` | `OPEN`, `CLOSED` |
 | `StockAdjustmentReason` | `RECEIVED_STOCK`, `DAMAGE`, `THEFT_LOSS`, `RECOUNT`, `MANUAL_CORRECTION` |

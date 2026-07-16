@@ -30,7 +30,7 @@ export type SyncStatus = "pending" | "synced" | "error";
 export interface PendingSale {
   clientId: string; // stable id generated on device, used as idempotency key on sync
   items: PendingSaleItem[];
-  paymentMethod: "CASH" | "MPESA" | "CARD" | "BANK" | "SPLIT" | "CREDIT";
+  paymentMethod: "CASH" | "MPESA_MANUAL" | "MPESA" | "CARD" | "BANK" | "SPLIT" | "CREDIT";
   amountTendered?: number;
   status: "COMPLETED";
   createdAt: string;
@@ -44,8 +44,9 @@ export interface PendingSale {
   customerName?: string;
   couponCode?: string;
   splitPayments?: SplitPaymentEntry[];
-  // Only set for a standalone MPESA sale — proves the STK push for this
-  // amount already succeeded before the sale is allowed to complete.
+  // Only set for a standalone MPESA (STK push) sale — proves the STK push
+  // for this amount already succeeded before the sale is allowed to
+  // complete. Not used for MPESA_MANUAL, which is cashier-asserted.
   mpesaCheckoutRequestId?: string;
 }
 

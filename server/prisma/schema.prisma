@@ -56,6 +56,12 @@ enum DiscountType {
 
 enum PaymentMethod {
   CASH
+  // Cashier-asserted M-Pesa payment — the customer already paid (e.g. sent
+  // money to a till/paybill outside this system) and the cashier is just
+  // recording it, same trust level as CARD/BANK. No STK push involved.
+  MPESA_MANUAL
+  // STK Push-verified M-Pesa payment — requires a confirmed MpesaTransaction
+  // (see sales.ts) before the sale is allowed to complete.
   MPESA
   CARD
   BANK

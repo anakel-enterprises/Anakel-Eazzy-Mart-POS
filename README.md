@@ -70,8 +70,8 @@ Full setup detail, environment variables, and production deployment: see
 
 ## What's built
 
-Checkout/POS (cash, live M-Pesa STK Push, card, bank, split, and credit payment, with tiered pricing,
-promotions, and coupon codes), Inventory (with CSV import and barcode label printing), Cash Register (open/close +
+Checkout/POS (cash, manually-recorded and live-STK-push M-Pesa, card, bank, split, and credit payment,
+with tiered pricing, promotions, and coupon codes), Inventory (with CSV import and barcode label printing), Cash Register (open/close +
 reconciliation), Suppliers & purchase ledgers, Customers & credit sales, Expenses & Income (with an
 approval workflow), Promotions & Coupons, an 8-tab Reports suite (P&L, sales, profit, inventory,
 finance, customers, suppliers, employee performance), Employees with per-employee role + fine-grained
