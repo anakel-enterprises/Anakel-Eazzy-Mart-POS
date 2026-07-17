@@ -71,6 +71,7 @@ const permissionsSchema = z.object(
 
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
   role: z.enum(["ADMIN", "MANAGER", "CASHIER", "STOREKEEPER", "ACCOUNTANT"]).optional(),
   active: z.boolean().optional(),
   password: z.string().min(8).optional(),
@@ -93,21 +94,69 @@ employeesRouter.put(
 
     const passwordHash = data.password ? await bcrypt.hash(data.password, 10) : undefined;
 
-    const user = await prisma.user.update({
-      where: { id: existing.id },
-      data: {
-        name: data.name,
-        role: data.role,
-        active: data.active,
-        passwordHash,
-        ...(data.permissions === undefined ? {} : { permissions: data.permissions ?? Prisma.DbNull }),
-      },
-      select: { id: true, name: true, email: true, role: true, active: true, createdAt: true, permissions: true },
-    });
+    let user;
+    try {
+      user = await prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          name: data.name,
+          email: data.email,
+          role: data.role,
+          active: data.active,
+          passwordHash,
+          ...(data.permissions === undefined ? {} : { permissions: data.permissions ?? Prisma.DbNull }),
+        },
+        select: { id: true, name: true, email: true, role: true, active: true, createdAt: true, permissions: true },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        res.status(400).json({ error: "That email is already in use by another employee" });
+        return;
+      }
+      throw err;
+    }
+
     res.json({
       ...user,
       permissions: resolvePermissions(user.role, user.permissions),
       customized: user.permissions !== null,
     });
+  })
+);
+
+employeesRouter.delete(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const existing = await prisma.user.findFirst({
+      where: { id: req.params.id, storeId: req.auth!.storeId },
+    });
+    if (!existing) {
+      res.status(404).json({ error: "Employee not found" });
+      return;
+    }
+    if (existing.id === req.auth!.userId) {
+      res.status(400).json({ error: "You can't delete your own account" });
+      return;
+    }
+
+    try {
+      await prisma.user.delete({ where: { id: existing.id } });
+    } catch (err) {
+      // FK constraint violation — this employee has sales, stock
+      // adjustments, or other activity recorded against their account.
+      // That history has to stay attributable, so a real delete is only
+      // possible for an account that's never actually been used; anyone
+      // else can only be disabled (active: false), not removed.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2003") {
+        res.status(400).json({
+          error:
+            "This employee has sales or other activity recorded against their account, so they can't be permanently deleted. Use Disable instead to remove their access while keeping that history intact.",
+        });
+        return;
+      }
+      throw err;
+    }
+
+    res.status(204).end();
   })
 );

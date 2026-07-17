@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { localDb } from "../db/localDb";
 
 export interface CachedResult<T> {
@@ -28,6 +28,15 @@ export async function getCached<T>(path: string, cacheKey: string = path): Promi
     await localDb.apiCache.put({ url: cacheKey, data, cachedAt });
     return { data, stale: false, cachedAt };
   } catch (err) {
+    // Only fall back to a stale local snapshot for a genuine connectivity
+    // failure (ApiError status 0 — see lib/api.ts). A 401/403 means the
+    // request actually reached the server and was rejected; treating that
+    // the same as "offline" both shows a misleading message (a permissions
+    // problem isn't a connectivity problem) and risks resurfacing this
+    // device's cached response from a *different*, more-privileged user's
+    // earlier session to someone who isn't authorized to see it.
+    if (err instanceof ApiError && err.status !== 0) throw err;
+
     const cached = await localDb.apiCache.get(cacheKey);
     if (cached) {
       return { data: cached.data as T, stale: true, cachedAt: cached.cachedAt };

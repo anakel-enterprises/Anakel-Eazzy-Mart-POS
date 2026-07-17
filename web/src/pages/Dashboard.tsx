@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getCached } from "../lib/cachedFetch";
+import { ApiError } from "../lib/api";
 import { SALES_SYNCED_EVENT } from "../lib/sync";
 import { overlayDashboard } from "../lib/offlineStats";
 import { localDb } from "../db/localDb";
@@ -45,8 +46,17 @@ export function Dashboard() {
         setStale(res.stale);
         setCachedAt(res.cachedAt);
         setError(null);
-      } catch {
-        if (!cancelled) setError("Couldn't load the dashboard — you're offline and no cached data is available on this device yet.");
+      } catch (err) {
+        if (cancelled) return;
+        // Routing normally keeps a user without VIEW_REPORTS off this page
+        // entirely (see App.tsx), but permissions can change mid-session —
+        // a 403 here means the request reached the server and was actually
+        // rejected, which is a different problem than no connection at all.
+        if (err instanceof ApiError && err.status === 403) {
+          setError("You don't have permission to view the dashboard — ask an admin to grant Reports access.");
+        } else {
+          setError("Couldn't load the dashboard — you're offline and no cached data is available on this device yet.");
+        }
       }
     }
 

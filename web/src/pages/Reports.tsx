@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getCached } from "../lib/cachedFetch";
+import { api, ApiError } from "../lib/api";
 import { downloadCsv } from "../lib/csv";
 import { SALES_SYNCED_EVENT } from "../lib/sync";
 import { localDb } from "../db/localDb";
 import { useAuth } from "../context/AuthContext";
+import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type PaymentMethod } from "../lib/paymentMethods";
 import {
   filterSalesByRange,
   overlayAnalytics,
@@ -24,6 +26,7 @@ import type {
   InventoryReport,
   ProfitLossReport,
   ProfitReport,
+  SaleHistoryRow,
   SalesSummary,
   SuppliersReport,
   TimeseriesPoint,
@@ -109,6 +112,17 @@ export function Reports() {
   const [stale, setStale] = useState(false);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
+  const [permissionError, setPermissionError] = useState(false);
+
+  // Drill-down for the Employees tab: clicking a row in "Sales by employee"
+  // below selects a cashierId and shows their complete sale-by-sale history
+  // (not scoped to the period selector above, unlike the summary it's
+  // attached to — the whole point of a history is to see everything).
+  const [selectedEmployee, setSelectedEmployee] = useState<{ cashierId: string; name: string } | null>(null);
+  const [employeeSales, setEmployeeSales] = useState<SaleHistoryRow[]>([]);
+  const [employeeSalesLoading, setEmployeeSalesLoading] = useState(false);
+  const [employeeSalesError, setEmployeeSalesError] = useState<string | null>(null);
+  const [employeePaymentFilter, setEmployeePaymentFilter] = useState<PaymentMethod | "">("");
 
   const { user } = useAuth();
   const currentUser = useMemo(() => ({ id: user?.id ?? "", name: user?.name ?? "You" }), [user]);
@@ -198,8 +212,18 @@ export function Reports() {
       setStale(res.stale);
       setCachedAt(res.cachedAt);
       setLoadError(false);
-    } catch {
-      if (!cancelledRef.current) setLoadError(true);
+      setPermissionError(false);
+    } catch (err) {
+      if (cancelledRef.current) return;
+      // Reaching this page at all already requires VIEW_REPORTS (see
+      // Sidebar's nav gating), so a 403 here only happens if that
+      // permission was revoked mid-session — worth a distinct message
+      // rather than the misleading "you're offline" one.
+      if (err instanceof ApiError && err.status === 403) {
+        setPermissionError(true);
+      } else {
+        setLoadError(true);
+      }
     }
   }
 
@@ -269,6 +293,32 @@ export function Reports() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, period, customFrom, customTo]);
 
+  useEffect(() => {
+    if (!selectedEmployee) {
+      setEmployeeSales([]);
+      return;
+    }
+    let cancelled = false;
+    setEmployeeSalesLoading(true);
+    setEmployeeSalesError(null);
+    const params = new URLSearchParams({ cashierId: selectedEmployee.cashierId });
+    if (employeePaymentFilter) params.set("paymentMethod", employeePaymentFilter);
+    api
+      .get<SaleHistoryRow[]>(`/api/sales?${params.toString()}`)
+      .then((rows) => {
+        if (!cancelled) setEmployeeSales(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) setEmployeeSalesError(err instanceof ApiError ? err.message : "Couldn't load sales history");
+      })
+      .finally(() => {
+        if (!cancelled) setEmployeeSalesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEmployee, employeePaymentFilter]);
+
   function downloadPnl() {
     if (!displayProfitLoss) return;
     const slug = period === "Custom" && customFrom && customTo ? `${customFrom}_to_${customTo}` : period.toLowerCase().replace(/\s+/g, "-");
@@ -301,18 +351,23 @@ export function Reports() {
           ))}
         </div>
 
-        {loadError && (
+        {permissionError && (
+          <div className="text-sm font-medium text-brand-warn">
+            You don't have permission to view reports anymore — ask an admin to grant Reports access.
+          </div>
+        )}
+        {!permissionError && loadError && (
           <div className="text-sm font-medium text-brand-warn">
             Couldn't load this report — you're offline and no cached data is available on this device yet.
           </div>
         )}
-        {!loadError && stale && (
+        {!permissionError && !loadError && stale && (
           <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
             Offline — showing figures from {cachedAt ? new Date(cachedAt).toLocaleString("en-KE") : "the last time this device was online"}.
             Will update automatically once you're back online.
           </div>
         )}
-        {!loadError && tab !== "Suppliers" && unsyncedCountForTab > 0 && (
+        {!permissionError && !loadError && tab !== "Suppliers" && unsyncedCountForTab > 0 && (
           <div className="rounded-lg bg-brand-accent/10 px-3 py-2 text-sm font-medium text-brand-accentText">
             Includes {unsyncedCountForTab} sale{unsyncedCountForTab === 1 ? "" : "s"} made on this device that{" "}
             {unsyncedCountForTab === 1 ? "hasn't" : "haven't"} synced yet — figures are estimates until they do.
@@ -725,11 +780,20 @@ export function Reports() {
                       <span>TOTAL SALES</span>
                     </div>
                     {displayEmployees.map((e) => (
-                      <div key={e.cashierId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
+                      <button
+                        key={e.cashierId}
+                        onClick={() => {
+                          setSelectedEmployee({ cashierId: e.cashierId, name: e.name });
+                          setEmployeePaymentFilter("");
+                        }}
+                        className={`grid w-full grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-left text-sm hover:bg-brand-bg ${
+                          selectedEmployee?.cashierId === e.cashierId ? "bg-brand-bg" : ""
+                        }`}
+                      >
                         <span className="font-semibold text-brand-ink">{e.name}</span>
                         <span className="text-brand-inkMuted">{e.transactionCount} sales</span>
                         <span className="font-semibold">{currencyFmt.format(e.totalSales)}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -737,7 +801,77 @@ export function Reports() {
               {displayEmployees && displayEmployees.length === 0 && (
                 <div className="text-sm text-brand-inkMuted">No sales recorded in this period.</div>
               )}
+              <div className="pt-3 text-xs text-brand-inkMuted">Tap an employee to see their complete sales history below.</div>
             </Card>
+
+            {selectedEmployee && (
+              <Card className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="font-display text-[15px] font-bold text-brand-ink">Sales history</div>
+                    <div className="text-xs text-brand-inkMuted">{selectedEmployee.name} · complete history, not limited to the period above</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={employeePaymentFilter}
+                      onChange={(e) => setEmployeePaymentFilter(e.target.value as PaymentMethod | "")}
+                      className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                    >
+                      <option value="">All payment methods</option>
+                      {PAYMENT_METHODS.map((m) => (
+                        <option key={m} value={m}>
+                          {PAYMENT_METHOD_LABELS[m]}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setSelectedEmployee(null)}
+                      aria-label="Close sales history"
+                      className="text-sm text-brand-inkMuted hover:text-brand-ink"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                {employeeSalesError && <div className="text-sm font-medium text-brand-warn">{employeeSalesError}</div>}
+                {!employeeSalesError && employeeSalesLoading && <div className="text-sm text-brand-inkMuted">Loading…</div>}
+                {!employeeSalesError && !employeeSalesLoading && (
+                  <div className="overflow-x-auto">
+                    <div className="min-w-[600px]">
+                      <div className="grid grid-cols-[1.3fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                        <span>DATE</span>
+                        <span>ITEMS</span>
+                        <span>TOTAL</span>
+                        <span>PAYMENT</span>
+                        <span>STATUS</span>
+                      </div>
+                      {employeeSales.map((s) => (
+                        <div
+                          key={s.id}
+                          className="grid grid-cols-[1.3fr_0.7fr_0.9fr_1.1fr_0.9fr] items-center gap-2 border-b border-brand-border/60 py-2.5 text-sm"
+                        >
+                          <span className="text-brand-inkMuted">{new Date(s.createdAt).toLocaleString("en-KE")}</span>
+                          <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
+                          <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
+                          <span className="text-brand-inkMuted">
+                            {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
+                          </span>
+                          <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
+                            {s.status}
+                          </span>
+                        </div>
+                      ))}
+                      {employeeSales.length === 0 && (
+                        <div className="py-6 text-sm text-brand-inkMuted">
+                          No sales{employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} yet.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
           </>
         )}
       </div>

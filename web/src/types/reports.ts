@@ -68,6 +68,23 @@ export interface EmployeeRow {
   transactionCount: number;
 }
 
+// A single sale from GET /api/sales?cashierId=... — the detailed drill-down
+// behind an employee's row in the Reports "Employees" tab.
+export interface SaleHistoryItem {
+  id: string;
+  name: string;
+  quantity: number;
+}
+
+export interface SaleHistoryRow {
+  id: string;
+  createdAt: string;
+  total: string | number;
+  paymentMethod: string;
+  status: string;
+  items: SaleHistoryItem[];
+}
+
 export interface ProfitLossReport {
   transactionCount: number;
   netSales: number;

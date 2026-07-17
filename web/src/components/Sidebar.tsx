@@ -1,34 +1,9 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useSidebar } from "../context/SidebarContext";
-import type { PermissionKey } from "../lib/permissions";
+import { NAV_ITEMS, canAccess } from "../lib/navItems";
 
 type Role = "ADMIN" | "MANAGER" | "CASHIER" | "STOREKEEPER" | "ACCOUNTANT";
-
-interface NavItem {
-  to: string;
-  label: string;
-  letter: string;
-  // Gated by a specific permission (ADMIN always bypasses), or by
-  // adminOnly for the couple of screens that stay hard-locked to ADMIN
-  // regardless of any permission toggle (employee & store management).
-  permission?: PermissionKey;
-  adminOnly?: boolean;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { to: "/", label: "Dashboard", letter: "D" },
-  { to: "/checkout", label: "Checkout", letter: "C", permission: "MAKE_SALES" },
-  { to: "/inventory", label: "Inventory", letter: "I", permission: "MANAGE_PRODUCTS" },
-  { to: "/register", label: "Cash Register", letter: "R", permission: "MAKE_SALES" },
-  { to: "/suppliers", label: "Suppliers", letter: "SU", permission: "MANAGE_SUPPLIERS" },
-  { to: "/credit-sales", label: "Credit Sales", letter: "CR", permission: "MANAGE_CUSTOMERS" },
-  { to: "/expenses", label: "Expenses & Income", letter: "E", permission: "MANAGE_EXPENSES" },
-  { to: "/promotions", label: "Promotions", letter: "PR", permission: "MANAGE_PROMOTIONS" },
-  { to: "/reports", label: "Reports", letter: "RP", permission: "VIEW_REPORTS" },
-  { to: "/employees", label: "Employees", letter: "U", adminOnly: true },
-  { to: "/settings", label: "Settings", letter: "S", adminOnly: true },
-];
 
 const ROLE_LABELS: Record<Role, string> = {
   ADMIN: "Admin",
@@ -41,12 +16,7 @@ const ROLE_LABELS: Record<Role, string> = {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const { isOpen, close } = useSidebar();
-  const isAdmin = user?.role === "ADMIN";
-  const items = NAV_ITEMS.filter((item) => {
-    if (item.adminOnly) return isAdmin;
-    if (item.permission) return isAdmin || !!user?.permissions?.[item.permission];
-    return true;
-  });
+  const items = NAV_ITEMS.filter((item) => canAccess(item, user));
 
   return (
     <>

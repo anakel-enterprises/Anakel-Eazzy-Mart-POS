@@ -398,7 +398,8 @@ Every route requires `role:ADMIN`.
 | GET | `/api/employees/permission-catalog` | The full permission catalog + role defaults, for building the editor UI |
 | GET | `/api/employees/` | List all employees in the store |
 | POST | `/api/employees/` | Create an employee account |
-| PUT | `/api/employees/:id` | Update name/role/active/password/permissions |
+| PUT | `/api/employees/:id` | Update name/email/role/active/password/permissions |
+| DELETE | `/api/employees/:id` | Permanently delete an employee — only if they have no recorded activity |
 
 ### GET `/api/employees/permission-catalog`
 
@@ -428,12 +429,26 @@ shape.
 | Field | Type | Notes |
 |---|---|---|
 | `name` | string, min 1 | optional |
+| `email` | valid email | optional — `400 That email is already in use by another employee` if it collides with another account (`User.email` is globally unique) |
 | `role` | enum (same 5 values) | optional |
 | `active` | boolean | optional — set `false` to disable the account (rejects their next login/request) |
 | `password` | string, min 8 | optional — rehashed and replaces the old one; this is how an admin resets a forgotten password |
 | `permissions` | partial map of the 7 permission keys, or `null` | optional — `null` clears overrides back to role defaults; omit the field entirely to leave overrides untouched; a partial object merges over existing overrides |
 
 `404` if the employee isn't in the caller's store. Response: the updated employee in list-item shape.
+
+### DELETE `/api/employees/:id`
+
+`400 You can't delete your own account` if `:id` is the caller. Otherwise attempts a real delete —
+`Sale.cashierId`, `StockAdjustment.userId`, `SupplierTransaction`/`CreditPayment.recordedById`,
+`Expense.requestedById`/`approvedById`, and `MpesaTransaction` (see [DATA_MODEL.md](./DATA_MODEL.md)) all
+reference `User` with no cascade, so any account that's actually recorded activity can't be removed
+without either orphaning or silently deleting that history — the request fails with
+`400 This employee has sales or other activity recorded against their account, so they can't be
+permanently deleted. Use Disable instead to remove their access while keeping that history intact.`
+instead. Only an account with zero recorded activity (created by mistake, never logged in and used) can
+actually be deleted; every other case should use `PUT .../:id { active: false }`. `404` if the employee
+isn't in the caller's store. `204` on success.
 
 ## Expenses & Income — `/api/expenses`, `/api/income`
 

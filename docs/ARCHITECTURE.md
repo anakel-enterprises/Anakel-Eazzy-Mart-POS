@@ -128,7 +128,7 @@ user's role isn't in the route's allowed list:
 | Path | Page | Roles allowed |
 |---|---|---|
 | `/login` | `Login` | public |
-| `/` | `Dashboard` | any authenticated user |
+| `/` | `Dashboard` (or a redirect — see below) | any authenticated user |
 | `/checkout` | `Checkout` | ADMIN, MANAGER, CASHIER |
 | `/register` | `CashRegisterPage` | ADMIN, MANAGER, CASHIER |
 | `/inventory` | `Inventory` | ADMIN, MANAGER, STOREKEEPER |
@@ -144,6 +144,19 @@ This is role-level gating only — it does not check the finer-grained `permissi
 filtering, e.g. `Sidebar` hides nav items and `Expenses` hides its approve/reject buttons based on
 `permissions`). Both layers are UX only; the API is the real authorization boundary. See
 [PERMISSIONS.md](./PERMISSIONS.md).
+
+**The one exception**: `/` is reachable by every role (it's the universal post-login landing route,
+listed with no `permission` originally), but `GET /api/reports/dashboard` requires `VIEW_REPORTS` — which
+CASHIER and STOREKEEPER don't have by default. `App.tsx`'s `DashboardRoute` checks this (via
+`lib/navItems.ts`'s `canAccess`/`firstAccessiblePath`, the same source of truth `Sidebar` uses to decide
+which nav links to show) and redirects a user without `VIEW_REPORTS` to the first page their actual
+`permissions` do allow, instead of rendering `Dashboard` and letting it 403. Without this, a cashier
+landed on `/` after login, `getCached("/api/reports/dashboard")` got a 403, and — because `getCached`
+used to treat *any* fetch failure as "offline" — silently fell back to this device's cached dashboard data
+(if any, e.g. from a previous admin session on the same device) under a misleading "Offline" banner.
+`getCached` now only falls back to a cached snapshot for an actual connectivity failure (`ApiError` status
+`0`); a real `401`/`403` is re-thrown so the caller can show an accurate message instead — and, for
+Dashboard specifically, so the caller is never reached at all in the normal case.
 
 Every page renders inside a shared `Layout` (`Sidebar` + content column) and independently renders its
 own `Topbar` (title/subtitle + the offline/sync status pills — see below) — there's no single global

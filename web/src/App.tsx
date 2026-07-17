@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth, type AuthUser } from "./context/AuthContext";
 import { Layout } from "./components/Layout";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { canAccess, firstAccessiblePath, NAV_ITEMS } from "./lib/navItems";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Checkout } from "./pages/Checkout";
@@ -23,12 +24,33 @@ function ProtectedRoutes({ roles }: { roles?: AuthUser["role"][] }) {
   return <Layout />;
 }
 
+// Dashboard is every role's default landing route (see Sidebar's NAV_ITEMS
+// and the bare "/" below), but its data is gated behind VIEW_REPORTS on the
+// server (GET /api/reports/dashboard) — a role that doesn't have it
+// (CASHIER/STOREKEEPER by default) would otherwise land here, get a 403 on
+// every request, and see a misleading "offline" banner instead of actual
+// data. Route them straight to whatever they *can* use instead.
+function DashboardRoute() {
+  const { user } = useAuth();
+  const dashboardItem = NAV_ITEMS[0];
+  if (canAccess(dashboardItem, user)) return <Dashboard />;
+
+  const fallback = firstAccessiblePath(user);
+  if (fallback) return <Navigate to={fallback} replace />;
+
+  return (
+    <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-brand-inkMuted">
+      This account doesn't have access to any section yet — ask an admin to grant some permissions.
+    </div>
+  );
+}
+
 function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route element={<ProtectedRoutes />}>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<DashboardRoute />} />
       </Route>
       <Route element={<ProtectedRoutes roles={["ADMIN", "MANAGER", "CASHIER"]} />}>
         <Route path="/checkout" element={<Checkout />} />
