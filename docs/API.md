@@ -254,10 +254,11 @@ sale; `200` with the pre-existing `Sale` (including `items` only) on an idempote
 ### GET `/api/sales/`
 
 Query: `status` (optional filter), `cashierId` (optional filter — an employee's sales history), `paymentMethod`
-(optional filter), `limit` (optional). Returns sales for the store including `items` and the cashier's name,
-newest first. Default `limit` is `50`, **except** when `cashierId` is given: an employee's own sales history is
-returned in full (no cap) unless `limit` is passed explicitly, since "recent sales" and "one employee's complete
-history" are different use cases with different expectations of completeness.
+(optional filter), `limit` (optional). Returns sales for the store including `items`, the cashier's name, and the
+customer's name (`null` for a walk-in sale with no stored customer), newest first. Default `limit` is `50`,
+**except** when `cashierId` is given: an employee's own sales history is returned in full (no cap) unless `limit`
+is passed explicitly, since "recent sales" and "one employee's complete history" are different use cases with
+different expectations of completeness.
 
 ### GET `/api/sales/held`
 

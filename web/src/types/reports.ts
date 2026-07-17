@@ -74,6 +74,8 @@ export interface SaleHistoryItem {
   id: string;
   name: string;
   quantity: number;
+  unitPrice: string | number;
+  lineTotal: string | number;
 }
 
 export interface SaleHistoryRow {
@@ -83,6 +85,7 @@ export interface SaleHistoryRow {
   paymentMethod: string;
   status: string;
   items: SaleHistoryItem[];
+  customer: { name: string } | null;
 }
 
 export interface ProfitLossReport {

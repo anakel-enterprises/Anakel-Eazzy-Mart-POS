@@ -307,7 +307,7 @@ salesRouter.get(
         ...(typeof cashierId === "string" ? { cashierId } : {}),
         ...(typeof paymentMethod === "string" ? { paymentMethod: paymentMethod as never } : {}),
       },
-      include: { items: true, cashier: { select: { name: true } } },
+      include: { items: true, cashier: { select: { name: true } }, customer: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
       // Scoped to one cashier (an employee's sales history), an explicit
       // limit aside, is meant to be complete rather than truncated at the

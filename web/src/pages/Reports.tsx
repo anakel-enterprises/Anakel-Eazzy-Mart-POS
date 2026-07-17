@@ -123,6 +123,10 @@ export function Reports() {
   const [employeeSalesLoading, setEmployeeSalesLoading] = useState(false);
   const [employeeSalesError, setEmployeeSalesError] = useState<string | null>(null);
   const [employeePaymentFilter, setEmployeePaymentFilter] = useState<PaymentMethod | "">("");
+  // Which row in the sales-history table (below) is expanded to show its
+  // line items + customer — at most one at a time, collapsed by default so
+  // the table stays scannable.
+  const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
 
   const { user } = useAuth();
   const currentUser = useMemo(() => ({ id: user?.id ?? "", name: user?.name ?? "You" }), [user]);
@@ -294,6 +298,7 @@ export function Reports() {
   }, [tab, period, customFrom, customTo]);
 
   useEffect(() => {
+    setExpandedSaleId(null);
     if (!selectedEmployee) {
       setEmployeeSales([]);
       return;
@@ -838,30 +843,62 @@ export function Reports() {
                 {!employeeSalesError && employeeSalesLoading && <div className="text-sm text-brand-inkMuted">Loading…</div>}
                 {!employeeSalesError && !employeeSalesLoading && (
                   <div className="overflow-x-auto">
-                    <div className="min-w-[600px]">
-                      <div className="grid grid-cols-[1.3fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                    <div className="min-w-[680px]">
+                      <div className="grid grid-cols-[1fr_0.8fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
                         <span>DATE</span>
+                        <span>TIME</span>
                         <span>ITEMS</span>
                         <span>TOTAL</span>
                         <span>PAYMENT</span>
                         <span>STATUS</span>
                       </div>
-                      {employeeSales.map((s) => (
-                        <div
-                          key={s.id}
-                          className="grid grid-cols-[1.3fr_0.7fr_0.9fr_1.1fr_0.9fr] items-center gap-2 border-b border-brand-border/60 py-2.5 text-sm"
-                        >
-                          <span className="text-brand-inkMuted">{new Date(s.createdAt).toLocaleString("en-KE")}</span>
-                          <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
-                          <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
-                          <span className="text-brand-inkMuted">
-                            {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
-                          </span>
-                          <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
-                            {s.status}
-                          </span>
-                        </div>
-                      ))}
+                      {employeeSales.map((s) => {
+                        const createdAt = new Date(s.createdAt);
+                        const expanded = expandedSaleId === s.id;
+                        return (
+                          <div key={s.id} className="border-b border-brand-border/60">
+                            <button
+                              onClick={() => setExpandedSaleId(expanded ? null : s.id)}
+                              aria-expanded={expanded}
+                              className={`grid w-full grid-cols-[1fr_0.8fr_0.7fr_0.9fr_1.1fr_0.9fr] items-center gap-2 py-2.5 text-left text-sm hover:bg-brand-bg ${
+                                expanded ? "bg-brand-bg" : ""
+                              }`}
+                            >
+                              <span className="text-brand-inkMuted">{createdAt.toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}</span>
+                              <span className="text-brand-inkMuted">{createdAt.toLocaleTimeString("en-KE", { hour: "numeric", minute: "2-digit" })}</span>
+                              <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
+                              <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
+                              <span className="text-brand-inkMuted">
+                                {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
+                              </span>
+                              <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
+                                {s.status}
+                              </span>
+                            </button>
+                            {expanded && (
+                              <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
+                                <div className="mb-2 text-xs font-semibold text-brand-inkMuted">
+                                  Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
+                                </div>
+                                <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
+                                  <span>ITEM</span>
+                                  <span>QTY</span>
+                                  <span>UNIT PRICE</span>
+                                  <span>LINE TOTAL</span>
+                                </div>
+                                {s.items.map((item) => (
+                                  <div key={item.id} className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/40 py-1.5 text-[13px]">
+                                    <span className="text-brand-ink">{item.name}</span>
+                                    <span className="text-brand-inkMuted">{item.quantity}</span>
+                                    <span className="text-brand-inkMuted">{currencyFmt.format(Number(item.unitPrice))}</span>
+                                    <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(item.lineTotal))}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                       {employeeSales.length === 0 && (
                         <div className="py-6 text-sm text-brand-inkMuted">
                           No sales{employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} yet.
@@ -869,6 +906,9 @@ export function Reports() {
                       )}
                     </div>
                   </div>
+                )}
+                {!employeeSalesError && !employeeSalesLoading && employeeSales.length > 0 && (
+                  <div className="text-xs text-brand-inkMuted">Tap a sale to see the items sold and which customer it went to.</div>
                 )}
               </Card>
             )}
