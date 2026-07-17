@@ -3,6 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { localDb, newClientId, type CachedProduct, type SplitPaymentEntry } from "../db/localDb";
 import { queueSale, refreshProductCache } from "../lib/sync";
 import { api, ApiError, isApiReachable } from "../lib/api";
+import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS } from "../lib/paymentMethods";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 
@@ -24,20 +25,10 @@ interface CustomerOption {
 }
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
-const PAYMENT_METHODS = ["CASH", "MPESA_MANUAL", "MPESA", "CARD", "BANK", "SPLIT", "CREDIT"] as const;
 // MPESA_MANUAL — customer already paid (e.g. sent to a till/paybill outside
 // this system) and the cashier just records it, same trust level as
 // CASH/CARD/BANK. MPESA — the live STK push flow below, which requires the
 // customer to approve a prompt before the sale can complete.
-const PAYMENT_METHOD_LABELS: Record<(typeof PAYMENT_METHODS)[number], string> = {
-  CASH: "CASH",
-  MPESA_MANUAL: "M-PESA SALE",
-  MPESA: "M-PESA PROMPT",
-  CARD: "CARD",
-  BANK: "BANK",
-  SPLIT: "SPLIT",
-  CREDIT: "CREDIT",
-};
 const SPLIT_METHODS = ["CASH", "MPESA", "CARD", "BANK"] as const;
 type MpesaStatus = "idle" | "sending" | "waiting" | "success" | "failed";
 // Safaricom's own STK prompt expires client-side after roughly a minute if
@@ -61,6 +52,11 @@ export function Checkout() {
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
+  const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [newCustomerError, setNewCustomerError] = useState<string | null>(null);
   const [showHeld, setShowHeld] = useState(false);
   const [mpesaPhone, setMpesaPhone] = useState("");
   const [mpesaStatus, setMpesaStatus] = useState<MpesaStatus>("idle");
@@ -135,10 +131,16 @@ export function Checkout() {
 
   function resetPaymentState() {
     setCart([]);
+    setPaymentMethod("CASH");
     setAmountTendered("");
     setCouponCode("");
     setCustomer(null);
     setCustomerQuery("");
+    setCustomerOptions([]);
+    setShowNewCustomerForm(false);
+    setNewCustomerName("");
+    setNewCustomerPhone("");
+    setNewCustomerError(null);
     setSplitRows([
       { method: "CASH", amount: 0 },
       { method: "MPESA", amount: 0 },
@@ -274,6 +276,41 @@ export function Checkout() {
     setSplitRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
+  function openNewCustomerForm() {
+    setNewCustomerName(customerQuery.trim());
+    setNewCustomerPhone("");
+    setNewCustomerError(null);
+    setShowNewCustomerForm(true);
+    setCustomerOptions([]);
+  }
+
+  // Credit sales previously required the customer to already exist in the
+  // system — a cashier meeting a first-time credit customer had to leave
+  // Checkout, go create them in Customers, then come back. This creates them
+  // inline and selects them for the current sale in one step. Requires
+  // MANAGE_CUSTOMERS (cashiers have it by default) and a connection, same as
+  // the customer search above it.
+  async function createCustomerInline() {
+    if (!newCustomerName.trim()) return;
+    setCreatingCustomer(true);
+    setNewCustomerError(null);
+    try {
+      const created = await api.post<CustomerOption>("/api/customers", {
+        name: newCustomerName.trim(),
+        phone: newCustomerPhone.trim() || undefined,
+      });
+      setCustomer({ id: created.id, name: created.name, phone: created.phone });
+      setShowNewCustomerForm(false);
+      setCustomerQuery("");
+      setNewCustomerName("");
+      setNewCustomerPhone("");
+    } catch (err) {
+      setNewCustomerError(err instanceof ApiError ? err.message : "Couldn't add customer");
+    } finally {
+      setCreatingCustomer(false);
+    }
+  }
+
   return (
     <>
       <Topbar title="Checkout" subtitle="Search by name, SKU, or barcode" />
@@ -328,7 +365,14 @@ export function Checkout() {
                 <div key={line.product.id} className="flex items-center justify-between rounded-[10px] bg-brand-bg px-3 py-2.5">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-brand-ink">{line.product.name}</div>
-                    <div className="text-xs text-brand-inkMuted">{currencyFmt.format(line.product.price)} each</div>
+                    <div className="text-xs text-brand-inkMuted">
+                      {currencyFmt.format(line.product.price)} each
+                      {line.quantity > 1 && (
+                        <span className="ml-1 font-semibold text-brand-ink">
+                          · {currencyFmt.format(line.product.price * line.quantity)} total
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -337,7 +381,14 @@ export function Checkout() {
                     >
                       −
                     </button>
-                    <span className="w-6 text-center text-sm font-semibold">{line.quantity}</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={line.quantity}
+                      onChange={(e) => updateQuantity(line.product.id, Math.trunc(Number(e.target.value)) || 0)}
+                      aria-label={`Quantity for ${line.product.name}`}
+                      className="w-12 rounded-md border border-brand-border bg-white px-1 py-1 text-center text-sm font-semibold outline-none focus:border-brand-accentDeep"
+                    />
                     <button
                       onClick={() => updateQuantity(line.product.id, line.quantity + 1)}
                       className="h-7 w-7 rounded-md bg-white text-brand-ink shadow-card"
@@ -500,6 +551,41 @@ export function Checkout() {
                     Change
                   </button>
                 </div>
+              ) : showNewCustomerForm ? (
+                <div className="flex flex-col gap-2 rounded-lg border border-brand-border p-3">
+                  <input
+                    autoFocus
+                    required
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    placeholder="Customer name"
+                    className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
+                  />
+                  <input
+                    value={newCustomerPhone}
+                    onChange={(e) => setNewCustomerPhone(e.target.value)}
+                    placeholder="Phone number (optional)"
+                    className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
+                  />
+                  {newCustomerError && <div className="text-xs font-medium text-brand-warn">{newCustomerError}</div>}
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      className="flex-1 px-3 py-2 text-xs"
+                      disabled={creatingCustomer}
+                      onClick={() => setShowNewCustomerForm(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      className="flex-1 px-3 py-2 text-xs"
+                      disabled={creatingCustomer || !newCustomerName.trim()}
+                      onClick={() => void createCustomerInline()}
+                    >
+                      {creatingCustomer ? "Adding…" : "Save & select"}
+                    </Button>
+                  </div>
+                </div>
               ) : (
                 <div className="relative">
                   <input
@@ -508,7 +594,7 @@ export function Checkout() {
                     placeholder="Search customer by name or phone"
                     className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
                   />
-                  {customerOptions.length > 0 && (
+                  {customerQuery.trim() && (
                     <div className="absolute z-10 mt-1 w-full rounded-lg border border-brand-border bg-white shadow-card">
                       {customerOptions.map((c) => (
                         <button
@@ -522,11 +608,19 @@ export function Checkout() {
                           {c.name} {c.phone && <span className="text-brand-inkMuted">· {c.phone}</span>}
                         </button>
                       ))}
+                      <button
+                        onClick={openNewCustomerForm}
+                        className={`block w-full px-3 py-2 text-left text-sm font-semibold text-brand-accentText hover:bg-brand-bg ${
+                          customerOptions.length > 0 ? "border-t border-brand-border" : ""
+                        }`}
+                      >
+                        + Add "{customerQuery.trim()}" as a new customer
+                      </button>
                     </div>
                   )}
                 </div>
               )}
-              <p className="mt-1 text-xs text-brand-inkMuted">Customer lookup requires a connection.</p>
+              <p className="mt-1 text-xs text-brand-inkMuted">Customer lookup and adding a new customer require a connection.</p>
             </div>
           )}
 

@@ -3,6 +3,7 @@ import { api, ApiError } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card, Switch } from "../components/ui";
 import type { PermissionCatalogEntry, PermissionMap } from "../lib/permissions";
+import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type PaymentMethod } from "../lib/paymentMethods";
 
 type Role = "ADMIN" | "MANAGER" | "CASHIER" | "STOREKEEPER" | "ACCOUNTANT";
 
@@ -34,6 +35,23 @@ interface EmployeeForm {
 
 const emptyForm: EmployeeForm = { name: "", email: "", password: "", confirmPassword: "", role: "CASHIER" };
 
+const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
+
+interface SaleHistoryItem {
+  id: string;
+  name: string;
+  quantity: number;
+}
+
+interface SaleHistoryRow {
+  id: string;
+  createdAt: string;
+  total: string | number;
+  paymentMethod: string;
+  status: string;
+  items: SaleHistoryItem[];
+}
+
 export function Employees() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [catalog, setCatalog] = useState<PermissionCatalogEntry[]>([]);
@@ -55,7 +73,38 @@ export function Employees() {
   const [resetPasswordError, setResetPasswordError] = useState<string | null>(null);
   const [resetPasswordSuccess, setResetPasswordSuccess] = useState(false);
 
+  const [salesHistory, setSalesHistory] = useState<SaleHistoryRow[]>([]);
+  const [salesHistoryLoading, setSalesHistoryLoading] = useState(false);
+  const [salesHistoryError, setSalesHistoryError] = useState<string | null>(null);
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState<PaymentMethod | "">("");
+
   const selected = employees.find((e) => e.id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (!selectedId) {
+      setSalesHistory([]);
+      return;
+    }
+    let cancelled = false;
+    setSalesHistoryLoading(true);
+    setSalesHistoryError(null);
+    const params = new URLSearchParams({ cashierId: selectedId });
+    if (paymentMethodFilter) params.set("paymentMethod", paymentMethodFilter);
+    api
+      .get<SaleHistoryRow[]>(`/api/sales?${params.toString()}`)
+      .then((rows) => {
+        if (!cancelled) setSalesHistory(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) setSalesHistoryError(err instanceof ApiError ? err.message : "Couldn't load sales history");
+      })
+      .finally(() => {
+        if (!cancelled) setSalesHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, paymentMethodFilter]);
 
   async function load() {
     const [emps, cat] = await Promise.all([
@@ -83,6 +132,7 @@ export function Employees() {
     setConfirmNewPassword("");
     setResetPasswordError(null);
     setResetPasswordSuccess(false);
+    setPaymentMethodFilter("");
   }
 
   async function resetPassword() {
@@ -215,7 +265,8 @@ export function Employees() {
         </div>
 
         {selected && editPermissions && (
-          <Card className="flex flex-1 flex-col gap-4 lg:overflow-auto">
+          <div className="flex w-full flex-1 flex-col gap-6 lg:overflow-auto">
+          <Card className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="font-display text-lg font-bold text-brand-ink">{selected.name}</div>
@@ -355,6 +406,62 @@ export function Employees() {
               </Button>
             </div>
           </Card>
+
+          <Card className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="font-display text-[15px] font-bold text-brand-ink">Sales history</span>
+              <select
+                value={paymentMethodFilter}
+                onChange={(e) => setPaymentMethodFilter(e.target.value as PaymentMethod | "")}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              >
+                <option value="">All payment methods</option>
+                {PAYMENT_METHODS.map((m) => (
+                  <option key={m} value={m}>
+                    {PAYMENT_METHOD_LABELS[m]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {salesHistoryError && <div className="text-sm font-medium text-brand-warn">{salesHistoryError}</div>}
+            {!salesHistoryError && salesHistoryLoading && <div className="text-sm text-brand-inkMuted">Loading…</div>}
+            {!salesHistoryError && !salesHistoryLoading && (
+              <div className="overflow-x-auto">
+                <div className="min-w-[560px]">
+                  <div className="grid grid-cols-[1.2fr_0.7fr_0.9fr_1fr_0.9fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                    <span>DATE</span>
+                    <span>ITEMS</span>
+                    <span>TOTAL</span>
+                    <span>PAYMENT</span>
+                    <span>STATUS</span>
+                  </div>
+                  {salesHistory.map((s) => (
+                    <div
+                      key={s.id}
+                      className="grid grid-cols-[1.2fr_0.7fr_0.9fr_1fr_0.9fr] items-center border-b border-brand-border/60 py-2.5 text-sm"
+                    >
+                      <span className="text-brand-inkMuted">{new Date(s.createdAt).toLocaleString("en-KE")}</span>
+                      <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
+                      <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
+                      <span className="text-brand-inkMuted">
+                        {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
+                      </span>
+                      <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
+                        {s.status}
+                      </span>
+                    </div>
+                  ))}
+                  {salesHistory.length === 0 && (
+                    <div className="py-6 text-sm text-brand-inkMuted">
+                      No sales{paymentMethodFilter ? ` paid by ${PAYMENT_METHOD_LABELS[paymentMethodFilter]}` : ""} yet.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </Card>
+          </div>
         )}
       </div>
     </>

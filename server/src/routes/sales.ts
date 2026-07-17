@@ -299,15 +299,20 @@ salesRouter.post(
 salesRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const { status, limit } = req.query;
+    const { status, limit, cashierId, paymentMethod } = req.query;
     const sales = await prisma.sale.findMany({
       where: {
         storeId: req.auth!.storeId,
         ...(typeof status === "string" ? { status: status as never } : {}),
+        ...(typeof cashierId === "string" ? { cashierId } : {}),
+        ...(typeof paymentMethod === "string" ? { paymentMethod: paymentMethod as never } : {}),
       },
       include: { items: true, cashier: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
-      take: typeof limit === "string" ? Number(limit) : 50,
+      // Scoped to one cashier (an employee's sales history), an explicit
+      // limit aside, is meant to be complete rather than truncated at the
+      // same default cap used for an unscoped "recent sales" list elsewhere.
+      take: typeof limit === "string" ? Number(limit) : cashierId ? undefined : 50,
     });
     res.json(sales);
   })
