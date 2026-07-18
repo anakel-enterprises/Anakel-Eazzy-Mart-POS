@@ -163,6 +163,18 @@ export function Reports() {
     }));
   }, [employeeSales]);
 
+  // Which day's sales are on screen — a dropdown jump instead of scrolling
+  // through every day at once, since a long-tenured employee's "complete
+  // history" can span months. Snaps to the most recent day whenever the
+  // underlying sales change (a different employee selected, or the payment
+  // filter changes what's in range).
+  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedDayKey(salesByDay[0]?.dayKey ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeeSales]);
+  const activeDay = salesByDay.find((g) => g.dayKey === selectedDayKey) ?? salesByDay[0] ?? null;
+
   const { user } = useAuth();
   const currentUser = useMemo(() => ({ id: user?.id ?? "", name: user?.name ?? "You" }), [user]);
 
@@ -851,7 +863,21 @@ export function Reports() {
                     <div className="font-display text-[15px] font-bold text-brand-ink">Sales history</div>
                     <div className="text-xs text-brand-inkMuted">{selectedEmployee.name} · complete history, not limited to the period above</div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {salesByDay.length > 0 && (
+                      <select
+                        value={selectedDayKey ?? ""}
+                        onChange={(e) => setSelectedDayKey(e.target.value)}
+                        aria-label="Jump to date"
+                        className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                      >
+                        {salesByDay.map((g) => (
+                          <option key={g.dayKey} value={g.dayKey}>
+                            {g.dayLabel} ({g.sales.length})
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <select
                       value={employeePaymentFilter}
                       onChange={(e) => setEmployeePaymentFilter(e.target.value as PaymentMethod | "")}
@@ -876,82 +902,78 @@ export function Reports() {
 
                 {employeeSalesError && <div className="text-sm font-medium text-brand-warn">{employeeSalesError}</div>}
                 {!employeeSalesError && employeeSalesLoading && <div className="text-sm text-brand-inkMuted">Loading…</div>}
-                {!employeeSalesError && !employeeSalesLoading && (
+                {!employeeSalesError && !employeeSalesLoading && activeDay && (
                   <div className="overflow-x-auto">
                     <div className="min-w-[600px]">
-                      {salesByDay.map(({ dayKey, dayLabel, sales }) => (
-                        <div key={dayKey} className="mb-4 last:mb-0">
-                          <div className="mb-1.5 flex items-baseline gap-2 rounded-md bg-brand-bg px-2 py-1.5">
-                            <span className="text-[12.5px] font-bold text-brand-ink">{dayLabel}</span>
-                            <span className="text-[11px] text-brand-inkMuted">
-                              {sales.length} sale{sales.length === 1 ? "" : "s"} ·{" "}
-                              {currencyFmt.format(sales.reduce((sum, s) => sum + Number(s.total), 0))}
-                            </span>
-                          </div>
-                          <div className="grid grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-                            <span>TIME</span>
-                            <span>ITEMS</span>
-                            <span>TOTAL</span>
-                            <span>PAYMENT</span>
-                            <span>STATUS</span>
-                          </div>
-                          {sales.map((s) => {
-                            const createdAt = new Date(s.createdAt);
-                            const expanded = expandedSaleId === s.id;
-                            return (
-                              <div key={s.id} className="border-b border-brand-border/60">
-                                <button
-                                  onClick={() => setExpandedSaleId(expanded ? null : s.id)}
-                                  aria-expanded={expanded}
-                                  className={`grid w-full grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] items-center gap-2 py-2.5 text-left text-sm hover:bg-brand-bg ${
-                                    expanded ? "bg-brand-bg" : ""
-                                  }`}
-                                >
-                                  <span className="text-brand-inkMuted">{createdAt.toLocaleTimeString("en-KE", { hour: "numeric", minute: "2-digit" })}</span>
-                                  <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
-                                  <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
-                                  <span className="text-brand-inkMuted">
-                                    {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
-                                  </span>
-                                  <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
-                                    {s.status}
-                                  </span>
-                                </button>
-                                {expanded && (
-                                  <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
-                                    <div className="mb-2 text-xs font-semibold text-brand-inkMuted">
-                                      Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
-                                    </div>
-                                    <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
-                                      <span>ITEM</span>
-                                      <span>QTY</span>
-                                      <span>UNIT PRICE</span>
-                                      <span>LINE TOTAL</span>
-                                    </div>
-                                    {s.items.map((item) => (
-                                      <div key={item.id} className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/40 py-1.5 text-[13px]">
-                                        <span className="text-brand-ink">{item.name}</span>
-                                        <span className="text-brand-inkMuted">{item.quantity}</span>
-                                        <span className="text-brand-inkMuted">{currencyFmt.format(Number(item.unitPrice))}</span>
-                                        <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(item.lineTotal))}</span>
-                                      </div>
-                                    ))}
+                      <div className="mb-1.5 flex items-baseline gap-2 rounded-md bg-brand-bg px-2 py-1.5">
+                        <span className="text-[12.5px] font-bold text-brand-ink">{activeDay.dayLabel}</span>
+                        <span className="text-[11px] text-brand-inkMuted">
+                          {activeDay.sales.length} sale{activeDay.sales.length === 1 ? "" : "s"} ·{" "}
+                          {currencyFmt.format(activeDay.sales.reduce((sum, s) => sum + Number(s.total), 0))}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                        <span>TIME</span>
+                        <span>ITEMS</span>
+                        <span>TOTAL</span>
+                        <span>PAYMENT</span>
+                        <span>STATUS</span>
+                      </div>
+                      {activeDay.sales.map((s) => {
+                        const createdAt = new Date(s.createdAt);
+                        const expanded = expandedSaleId === s.id;
+                        return (
+                          <div key={s.id} className="border-b border-brand-border/60">
+                            <button
+                              onClick={() => setExpandedSaleId(expanded ? null : s.id)}
+                              aria-expanded={expanded}
+                              className={`grid w-full grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] items-center gap-2 py-2.5 text-left text-sm hover:bg-brand-bg ${
+                                expanded ? "bg-brand-bg" : ""
+                              }`}
+                            >
+                              <span className="text-brand-inkMuted">{createdAt.toLocaleTimeString("en-KE", { hour: "numeric", minute: "2-digit" })}</span>
+                              <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
+                              <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
+                              <span className="text-brand-inkMuted">
+                                {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
+                              </span>
+                              <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
+                                {s.status}
+                              </span>
+                            </button>
+                            {expanded && (
+                              <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
+                                <div className="mb-2 text-xs font-semibold text-brand-inkMuted">
+                                  Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
+                                </div>
+                                <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
+                                  <span>ITEM</span>
+                                  <span>QTY</span>
+                                  <span>UNIT PRICE</span>
+                                  <span>LINE TOTAL</span>
+                                </div>
+                                {s.items.map((item) => (
+                                  <div key={item.id} className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/40 py-1.5 text-[13px]">
+                                    <span className="text-brand-ink">{item.name}</span>
+                                    <span className="text-brand-inkMuted">{item.quantity}</span>
+                                    <span className="text-brand-inkMuted">{currencyFmt.format(Number(item.unitPrice))}</span>
+                                    <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(item.lineTotal))}</span>
                                   </div>
-                                )}
+                                ))}
                               </div>
-                            );
-                          })}
-                        </div>
-                      ))}
-                      {employeeSales.length === 0 && (
-                        <div className="py-6 text-sm text-brand-inkMuted">
-                          No sales{employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} yet.
-                        </div>
-                      )}
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
-                {!employeeSalesError && !employeeSalesLoading && employeeSales.length > 0 && (
+                {!employeeSalesError && !employeeSalesLoading && !activeDay && (
+                  <div className="py-6 text-sm text-brand-inkMuted">
+                    No sales{employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} yet.
+                  </div>
+                )}
+                {!employeeSalesError && !employeeSalesLoading && activeDay && (
                   <div className="text-xs text-brand-inkMuted">Tap a sale to see the items sold and which customer it went to.</div>
                 )}
               </Card>
