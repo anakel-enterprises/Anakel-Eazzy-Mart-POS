@@ -53,6 +53,20 @@ function dayKeyFor(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Renders a "YYYY-MM-DD" day key as a full local date label — used for the
+// empty state when a date picked on the calendar has no sales. Parsed as
+// y/m/d components (not `new Date(dayKey)`) so it's built from the same
+// local-calendar-day meaning as dayKeyFor, not reinterpreted as UTC midnight.
+function formatDayKey(dayKey: string): string {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString("en-KE", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
 function formatBucketLabel(label: string, granularity: "day" | "month"): string {
   if (granularity === "month") {
     const [year, month] = label.split("-").map(Number);
@@ -173,7 +187,7 @@ export function Reports() {
     setSelectedDayKey(salesByDay[0]?.dayKey ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeSales]);
-  const activeDay = salesByDay.find((g) => g.dayKey === selectedDayKey) ?? salesByDay[0] ?? null;
+  const activeDay = salesByDay.find((g) => g.dayKey === selectedDayKey) ?? null;
 
   const { user } = useAuth();
   const currentUser = useMemo(() => ({ id: user?.id ?? "", name: user?.name ?? "You" }), [user]);
@@ -865,18 +879,15 @@ export function Reports() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {salesByDay.length > 0 && (
-                      <select
+                      <input
+                        type="date"
                         value={selectedDayKey ?? ""}
-                        onChange={(e) => setSelectedDayKey(e.target.value)}
-                        aria-label="Jump to date"
+                        min={salesByDay[salesByDay.length - 1]?.dayKey}
+                        max={salesByDay[0]?.dayKey}
+                        onChange={(e) => setSelectedDayKey(e.target.value || null)}
+                        aria-label="Pick a date"
                         className="rounded-lg border border-brand-border px-3 py-2 text-sm"
-                      >
-                        {salesByDay.map((g) => (
-                          <option key={g.dayKey} value={g.dayKey}>
-                            {g.dayLabel} ({g.sales.length})
-                          </option>
-                        ))}
-                      </select>
+                      />
                     )}
                     <select
                       value={employeePaymentFilter}
@@ -970,7 +981,11 @@ export function Reports() {
                 )}
                 {!employeeSalesError && !employeeSalesLoading && !activeDay && (
                   <div className="py-6 text-sm text-brand-inkMuted">
-                    No sales{employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} yet.
+                    {employeeSales.length === 0
+                      ? `No sales${employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} yet.`
+                      : `No sales${employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} on ${
+                          selectedDayKey ? formatDayKey(selectedDayKey) : "this date"
+                        }.`}
                   </div>
                 )}
                 {!employeeSalesError && !employeeSalesLoading && activeDay && (
