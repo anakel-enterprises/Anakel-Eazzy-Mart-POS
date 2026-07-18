@@ -17,8 +17,13 @@ function getToken(): string | null {
 // block indefinitely, and since the sync queue awaits requests one at a time
 // under a mutex, a single stuck request would silently stall all sync until
 // the browser's own (much longer) TCP timeout eventually gives up.
-export async function apiFetch<T>(path: string, options: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
-  const token = getToken();
+export async function apiFetch<T>(
+  path: string,
+  options: RequestInit = {},
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  tokenOverride?: string
+): Promise<T> {
+  const token = tokenOverride ?? getToken();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -55,7 +60,11 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, timeo
     // or the account was disabled) — previously this just made every page
     // silently render empty lists with no indication why. Clear the stale
     // session and let AuthContext/ProtectedRoutes redirect to login instead.
-    if (res.status === 401) {
+    // Only when it's the *ambient* session's token, though — a tokenOverride
+    // request (e.g. background-syncing a sale queued by a different, since
+    // logged-out employee) failing must never log out whoever is actually
+    // using the device right now.
+    if (res.status === 401 && tokenOverride === undefined) {
       localStorage.removeItem("auth_token");
       localStorage.removeItem("auth_user");
       window.dispatchEvent(new Event("auth:session-expired"));
@@ -75,7 +84,15 @@ export const api = {
   put: <T>(path: string, body?: unknown) =>
     apiFetch<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => apiFetch<T>(path, { method: "DELETE" }),
+  // Posts as a specific, already-known token rather than whatever's in the
+  // active session — see PendingSale.authToken for why this matters.
+  postAsUser: <T>(path: string, body: unknown, token: string) =>
+    apiFetch<T>(path, { method: "POST", body: JSON.stringify(body) }, DEFAULT_TIMEOUT_MS, token),
 };
+
+export function getAuthToken(): string | null {
+  return getToken();
+}
 
 // A real reachability check — navigator.onLine only reports whether *some*
 // network interface is up, not whether the API is actually reachable (e.g.

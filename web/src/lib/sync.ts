@@ -1,4 +1,4 @@
-import { api, ApiError, isApiReachable } from "./api";
+import { api, ApiError, getAuthToken, isApiReachable } from "./api";
 import {
   localDb,
   isLocalProductId,
@@ -62,8 +62,8 @@ export async function refreshProductCache(): Promise<void> {
   });
 }
 
-export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncError">): Promise<void> {
-  await localDb.pendingSales.put({ ...sale, syncStatus: "pending" });
+export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncError" | "authToken">): Promise<void> {
+  await localDb.pendingSales.put({ ...sale, authToken: getAuthToken() ?? undefined, syncStatus: "pending" });
   void flushPendingSales();
 }
 
@@ -114,7 +114,7 @@ async function doFlushPendingSales(): Promise<{ synced: number; failed: number }
   const pending = await localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray();
   for (const sale of pending) {
     try {
-      await api.post("/api/sales", {
+      const payload = {
         clientId: sale.clientId,
         items: sale.items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
         paymentMethod: sale.paymentMethod,
@@ -125,7 +125,16 @@ async function doFlushPendingSales(): Promise<{ synced: number; failed: number }
         couponCode: sale.couponCode,
         splitPayments: sale.splitPayments,
         mpesaCheckoutRequestId: sale.mpesaCheckoutRequestId,
-      });
+      };
+      // Sync as whoever actually rang this up, not whoever happens to be
+      // logged in on this device right now — see PendingSale.authToken.
+      // Only rows queued before that field existed fall back to the
+      // ambient session's token.
+      if (sale.authToken) {
+        await api.postAsUser("/api/sales", payload, sale.authToken);
+      } else {
+        await api.post("/api/sales", payload);
+      }
       await localDb.pendingSales.update(sale.clientId, { syncStatus: "synced" });
       synced++;
     } catch (err) {

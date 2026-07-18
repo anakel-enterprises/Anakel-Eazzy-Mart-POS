@@ -287,6 +287,16 @@ sequenceDiagram
 - The `Topbar` on every page reactively shows pending/error counts (via `useLiveQuery` against
   `pendingSales`) as "Offline — sales are queued on this device", "Syncing N sale(s)…", or a tap-to-retry
   "N sale(s) failed to sync" pill.
+- `pendingSales` is one shared IndexedDB table for the whole device/browser — it isn't scoped per
+  logged-in user. On a till shared across a shift, it's entirely normal for cashier A to ring up a sale
+  offline, then log out before it syncs, with cashier B (or the admin) logging in before connectivity
+  (or the next flush) actually happens. `queueSale()` therefore captures the queuing user's JWT on the
+  `PendingSale` row itself (`authToken`) and `flushPendingSales()` sends each sale with `api.postAsUser()`
+  using *that* token, not whatever's active in `localStorage` at flush time — so the sale is always
+  attributed to whoever actually rang it up, regardless of who's logged in when it finally syncs. (A
+  `tokenOverride` request failing with `401` also deliberately does not clear the ambient session or
+  fire `auth:session-expired` — that token may belong to an employee who's since logged out or been
+  disabled, and must never log out whoever is using the device right now.)
 
 ### What this buys you, and what it doesn't
 

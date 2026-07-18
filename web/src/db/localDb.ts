@@ -37,6 +37,15 @@ export interface PendingSale {
   createdAt: string;
   syncStatus: SyncStatus;
   syncError?: string;
+  // The JWT of whoever actually rang this sale up, captured at the moment
+  // it's queued. A device shared across a shift can easily have a sale still
+  // pending sync when a different employee (or the admin) logs in on it
+  // before that sync fires — flushing with *that* person's token would
+  // silently misattribute the sale to them in "sales by employee" reports.
+  // Sent explicitly on sync instead of relying on whatever token happens to
+  // be the active session's at the time. Optional only for rows queued
+  // before this field existed.
+  authToken?: string;
   customerId?: string;
   // Local-only — never sent to the server (which already knows the name via
   // the customerId relation). Kept here purely so the offline stats overlay
