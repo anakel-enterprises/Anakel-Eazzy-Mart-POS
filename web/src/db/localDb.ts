@@ -154,6 +154,10 @@ export interface PendingStockAdjustment {
   createdAt: string;
   syncStatus: SyncStatus;
   syncError?: string;
+  // Same reasoning as PendingSale.authToken — a shared device can sync this
+  // under a different, currently-logged-in user otherwise, misattributing
+  // who actually made the stock change.
+  authToken?: string;
 }
 
 // A delete of a product that already has a real server id, queued for

@@ -395,6 +395,7 @@ export async function queueStockAdjustment(
       reason,
       notes,
       createdAt,
+      authToken: getAuthToken() ?? undefined,
       syncStatus: "pending",
     });
     const existing = await localDb.products.get(productId);
@@ -425,12 +426,17 @@ async function doFlushPendingStockAdjustments(): Promise<{ synced: number; faile
   const pending = await localDb.pendingStockAdjustments.where("syncStatus").anyOf("pending", "error").toArray();
   for (const a of pending) {
     try {
-      await api.post(`/api/products/${a.productId}/adjustments`, {
+      const payload = {
         quantityDelta: a.quantityDelta,
         reason: a.reason,
         notes: a.notes,
         clientId: a.clientId,
-      });
+      };
+      if (a.authToken) {
+        await api.postAsUser(`/api/products/${a.productId}/adjustments`, payload, a.authToken);
+      } else {
+        await api.post(`/api/products/${a.productId}/adjustments`, payload);
+      }
       await localDb.pendingStockAdjustments.update(a.clientId, { syncStatus: "synced" });
       synced++;
     } catch (err) {

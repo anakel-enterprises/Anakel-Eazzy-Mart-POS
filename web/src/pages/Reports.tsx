@@ -46,6 +46,13 @@ const SURFACE = "#f9f8f5";
 const GRID = "#e9e8e4";
 const AVG_LINE = "#c9c6bd";
 
+// Calendar-day key in the viewer's local timezone (not UTC), so a sale made
+// at 11pm and one made just after midnight land in different day groups
+// exactly when a human would expect, not when UTC happens to roll over.
+function dayKeyFor(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function formatBucketLabel(label: string, granularity: "day" | "month"): string {
   if (granularity === "month") {
     const [year, month] = label.split("-").map(Number);
@@ -127,6 +134,34 @@ export function Reports() {
   // line items + customer — at most one at a time, collapsed by default so
   // the table stays scannable.
   const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
+
+  // Groups the (already newest-first) sales history into per-day sections
+  // instead of one long mixed list, so e.g. a busy Saturday isn't scattered
+  // across the same continuous scroll as last Tuesday.
+  const salesByDay = useMemo(() => {
+    const todayKey = dayKeyFor(new Date());
+    const yesterdayKey = dayKeyFor(new Date(Date.now() - 86_400_000));
+    const groups = new Map<string, SaleHistoryRow[]>();
+    for (const s of employeeSales) {
+      const key = dayKeyFor(new Date(s.createdAt));
+      (groups.get(key) ?? groups.set(key, []).get(key)!).push(s);
+    }
+    return Array.from(groups.entries()).map(([dayKey, sales]) => ({
+      dayKey,
+      dayLabel:
+        dayKey === todayKey
+          ? "Today"
+          : dayKey === yesterdayKey
+            ? "Yesterday"
+            : new Date(sales[0].createdAt).toLocaleDateString("en-KE", {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              }),
+      sales,
+    }));
+  }, [employeeSales]);
 
   const { user } = useAuth();
   const currentUser = useMemo(() => ({ id: user?.id ?? "", name: user?.name ?? "You" }), [user]);
@@ -843,62 +878,71 @@ export function Reports() {
                 {!employeeSalesError && employeeSalesLoading && <div className="text-sm text-brand-inkMuted">Loading…</div>}
                 {!employeeSalesError && !employeeSalesLoading && (
                   <div className="overflow-x-auto">
-                    <div className="min-w-[680px]">
-                      <div className="grid grid-cols-[1fr_0.8fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-                        <span>DATE</span>
-                        <span>TIME</span>
-                        <span>ITEMS</span>
-                        <span>TOTAL</span>
-                        <span>PAYMENT</span>
-                        <span>STATUS</span>
-                      </div>
-                      {employeeSales.map((s) => {
-                        const createdAt = new Date(s.createdAt);
-                        const expanded = expandedSaleId === s.id;
-                        return (
-                          <div key={s.id} className="border-b border-brand-border/60">
-                            <button
-                              onClick={() => setExpandedSaleId(expanded ? null : s.id)}
-                              aria-expanded={expanded}
-                              className={`grid w-full grid-cols-[1fr_0.8fr_0.7fr_0.9fr_1.1fr_0.9fr] items-center gap-2 py-2.5 text-left text-sm hover:bg-brand-bg ${
-                                expanded ? "bg-brand-bg" : ""
-                              }`}
-                            >
-                              <span className="text-brand-inkMuted">{createdAt.toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}</span>
-                              <span className="text-brand-inkMuted">{createdAt.toLocaleTimeString("en-KE", { hour: "numeric", minute: "2-digit" })}</span>
-                              <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
-                              <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
-                              <span className="text-brand-inkMuted">
-                                {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
-                              </span>
-                              <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
-                                {s.status}
-                              </span>
-                            </button>
-                            {expanded && (
-                              <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
-                                <div className="mb-2 text-xs font-semibold text-brand-inkMuted">
-                                  Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
-                                </div>
-                                <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
-                                  <span>ITEM</span>
-                                  <span>QTY</span>
-                                  <span>UNIT PRICE</span>
-                                  <span>LINE TOTAL</span>
-                                </div>
-                                {s.items.map((item) => (
-                                  <div key={item.id} className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/40 py-1.5 text-[13px]">
-                                    <span className="text-brand-ink">{item.name}</span>
-                                    <span className="text-brand-inkMuted">{item.quantity}</span>
-                                    <span className="text-brand-inkMuted">{currencyFmt.format(Number(item.unitPrice))}</span>
-                                    <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(item.lineTotal))}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                    <div className="min-w-[600px]">
+                      {salesByDay.map(({ dayKey, dayLabel, sales }) => (
+                        <div key={dayKey} className="mb-4 last:mb-0">
+                          <div className="mb-1.5 flex items-baseline gap-2 rounded-md bg-brand-bg px-2 py-1.5">
+                            <span className="text-[12.5px] font-bold text-brand-ink">{dayLabel}</span>
+                            <span className="text-[11px] text-brand-inkMuted">
+                              {sales.length} sale{sales.length === 1 ? "" : "s"} ·{" "}
+                              {currencyFmt.format(sales.reduce((sum, s) => sum + Number(s.total), 0))}
+                            </span>
                           </div>
-                        );
-                      })}
+                          <div className="grid grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                            <span>TIME</span>
+                            <span>ITEMS</span>
+                            <span>TOTAL</span>
+                            <span>PAYMENT</span>
+                            <span>STATUS</span>
+                          </div>
+                          {sales.map((s) => {
+                            const createdAt = new Date(s.createdAt);
+                            const expanded = expandedSaleId === s.id;
+                            return (
+                              <div key={s.id} className="border-b border-brand-border/60">
+                                <button
+                                  onClick={() => setExpandedSaleId(expanded ? null : s.id)}
+                                  aria-expanded={expanded}
+                                  className={`grid w-full grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] items-center gap-2 py-2.5 text-left text-sm hover:bg-brand-bg ${
+                                    expanded ? "bg-brand-bg" : ""
+                                  }`}
+                                >
+                                  <span className="text-brand-inkMuted">{createdAt.toLocaleTimeString("en-KE", { hour: "numeric", minute: "2-digit" })}</span>
+                                  <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
+                                  <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
+                                  <span className="text-brand-inkMuted">
+                                    {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
+                                  </span>
+                                  <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
+                                    {s.status}
+                                  </span>
+                                </button>
+                                {expanded && (
+                                  <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
+                                    <div className="mb-2 text-xs font-semibold text-brand-inkMuted">
+                                      Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
+                                    </div>
+                                    <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
+                                      <span>ITEM</span>
+                                      <span>QTY</span>
+                                      <span>UNIT PRICE</span>
+                                      <span>LINE TOTAL</span>
+                                    </div>
+                                    {s.items.map((item) => (
+                                      <div key={item.id} className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/40 py-1.5 text-[13px]">
+                                        <span className="text-brand-ink">{item.name}</span>
+                                        <span className="text-brand-inkMuted">{item.quantity}</span>
+                                        <span className="text-brand-inkMuted">{currencyFmt.format(Number(item.unitPrice))}</span>
+                                        <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(item.lineTotal))}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
                       {employeeSales.length === 0 && (
                         <div className="py-6 text-sm text-brand-inkMuted">
                           No sales{employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} yet.
