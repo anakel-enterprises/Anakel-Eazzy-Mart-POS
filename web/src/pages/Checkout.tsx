@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb, newClientId, type CachedProduct, type SplitPaymentEntry } from "../db/localDb";
 import { queueSale, queueCustomerCreate, refreshProductCache, refreshCustomerCache, undoLastSale } from "../lib/sync";
@@ -43,7 +43,15 @@ const MPESA_POLL_TIMEOUT_MS = 90_000;
 
 export function Checkout() {
   const [query, setQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [cart, setCart] = useState<CartLine[]>([]);
+  // A quantity field being actively retyped — tracked separately from the
+  // cart itself so clearing the digits to type a new number (e.g. changing
+  // "1" to "12") never passes through an empty/zero value that would
+  // otherwise be read as "remove this line" (see updateQuantity). Only
+  // committed to the cart on blur/Enter; the ✕ button is the only way to
+  // actually remove a line.
+  const [editingQty, setEditingQty] = useState<{ productId: string; value: string } | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<(typeof PAYMENT_METHODS)[number]>("CASH");
   const [amountTendered, setAmountTendered] = useState("");
   const [splitRows, setSplitRows] = useState<SplitPaymentEntry[]>([
@@ -144,12 +152,36 @@ export function Checkout() {
       return [...prev, { product, quantity: 1 }];
     });
     setQuery("");
+    // Clicking a search result moves focus to that result button — return
+    // it to the search field (and select whatever's still in it) so the
+    // next scan/keystroke lands there immediately, with no extra click and
+    // no leftover text to manually clear first.
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
   }
 
+  // The +/− buttons and the ✕ button are the only deliberate ways to change
+  // a line to zero (removing it) — see editingQty above for why the text
+  // input itself never does this via onChange.
   function updateQuantity(productId: string, quantity: number) {
     setCart((prev) =>
       quantity <= 0 ? prev.filter((l) => l.product.id !== productId) : prev.map((l) => (l.product.id === productId ? { ...l, quantity } : l))
     );
+  }
+
+  // Commits an in-progress quantity edit on blur/Enter. An empty, zero, or
+  // otherwise invalid value is simply discarded — the line's quantity stays
+  // whatever it was before the edit, never removed just because the field
+  // was momentarily blank while retyping.
+  function commitQtyEdit() {
+    if (!editingQty) return;
+    const parsed = Math.trunc(Number(editingQty.value));
+    if (Number.isFinite(parsed) && parsed >= 1) {
+      updateQuantity(editingQty.productId, parsed);
+    }
+    setEditingQty(null);
   }
 
   function removeFromCart(productId: string) {
@@ -397,6 +429,7 @@ export function Checkout() {
         <div className="flex flex-col gap-4 lg:overflow-hidden">
           <div className="flex flex-wrap gap-2">
             <ClearableInput
+              ref={searchInputRef}
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -465,8 +498,16 @@ export function Checkout() {
                     <input
                       type="number"
                       min="1"
-                      value={line.quantity}
-                      onChange={(e) => updateQuantity(line.product.id, Math.trunc(Number(e.target.value)) || 0)}
+                      value={editingQty?.productId === line.product.id ? editingQty.value : String(line.quantity)}
+                      onFocus={(e) => {
+                        setEditingQty({ productId: line.product.id, value: String(line.quantity) });
+                        e.target.select();
+                      }}
+                      onChange={(e) => setEditingQty({ productId: line.product.id, value: e.target.value })}
+                      onBlur={commitQtyEdit}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                      }}
                       aria-label={`Quantity for ${line.product.name}`}
                       className="w-12 rounded-md border border-brand-border bg-white px-1 py-1 text-center text-sm font-semibold outline-none focus:border-brand-accentDeep"
                     />
