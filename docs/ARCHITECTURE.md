@@ -177,9 +177,19 @@ a mixed list), and a tap-to-expand line-item + customer breakdown per sale. It's
   regardless of what's requested — see [API.md](./API.md#get-apisales).
 
 `SalesHistoryPanel` also shows a per-payment-method totals strip (CASH/MPESA/CARD/.../CREDIT, each with its
-total and sale count) across everything currently loaded — but **only when the viewer is an `ADMIN`**
-(`useAuth()`'s `user.role`, checked client-side; this is a display-only convenience, not a security
-boundary, since the underlying sales data is already scoped by the server call above).
+total and sale count) for whichever day the date picker has on screen — **only when the viewer is an
+`ADMIN`** (`useAuth()`'s `user.role`, checked client-side; this is a display-only convenience, not a
+security boundary, since the underlying sales data is already scoped by the server call above).
+
+**Works offline** the same two ways every other report does: `getCached()` (see "Offline statistics"
+below) serves this device's last successful fetch of that exact `cashierId`+payment-filter query when the
+network request fails, with the same amber "Offline — showing sales from `<cachedAt>`" banner pattern. On
+top of that, when the panel is showing the *signed-in user's own* history (`cashierId === user.id` — i.e.
+"My Sales", never the Reports drill-down into someone else's), it also live-overlays this device's
+currently-unsynced `pendingSales` (`useLiveQuery`, same reactive pattern as the Dashboard/Reports overlay),
+so a sale rung up while offline shows up immediately instead of only after it syncs. A sale still sitting
+in the local queue is only reliably known to belong to whoever queued it — that's exactly the ownership
+check the overlay uses to avoid ever misattributing it into an admin's lookup of a *different* employee.
 
 **Undoing a sale** (`Checkout.tsx`'s "Sold the wrong thing? Undo this sale", shown on the "Sale complete"
 screen) is a cashier's short-window self-service correction, not a general void tool — see

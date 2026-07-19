@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, ApiError } from "../lib/api";
+import { useLiveQuery } from "dexie-react-hooks";
+import { ApiError } from "../lib/api";
+import { getCached } from "../lib/cachedFetch";
+import { localDb } from "../db/localDb";
 import { useAuth } from "../context/AuthContext";
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type PaymentMethod } from "../lib/paymentMethods";
 import type { SaleHistoryRow } from "../types/reports";
@@ -51,9 +54,17 @@ interface SalesHistoryPanelProps {
 export function SalesHistoryPanel({ cashierId, employeeName, description, onClose }: SalesHistoryPanelProps) {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  // Only meaningful when viewing your own history (My Sales) — a sale
+  // still sitting in this device's local queue is only known to belong to
+  // whoever is currently logged in (see PendingSale.authToken); it would be
+  // wrong to attribute it to some other employee an admin is looking up in
+  // the Reports drill-down.
+  const isOwnHistory = cashierId === user?.id;
   const [sales, setSales] = useState<SaleHistoryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [paymentFilter, setPaymentFilter] = useState<PaymentMethod | "">("");
   // Which row is expanded to show its line items + customer — at most one
   // at a time, collapsed by default so the table stays scannable.
@@ -66,10 +77,17 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
     setError(null);
     const params = new URLSearchParams({ cashierId });
     if (paymentFilter) params.set("paymentMethod", paymentFilter);
-    api
-      .get<SaleHistoryRow[]>(`/api/sales?${params.toString()}`)
-      .then((rows) => {
-        if (!cancelled) setSales(rows);
+    const path = `/api/sales?${params.toString()}`;
+    // getCached tries the network first and falls back to this device's
+    // last successful fetch of this exact query when offline — the same
+    // pattern Dashboard/Reports use — so a previously-viewed history is
+    // still there with no connection.
+    getCached<SaleHistoryRow[]>(path)
+      .then((res) => {
+        if (cancelled) return;
+        setSales(res.data);
+        setStale(res.stale);
+        setCachedAt(res.cachedAt);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Couldn't load sales history");
@@ -82,6 +100,38 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
     };
   }, [cashierId, paymentFilter]);
 
+  // Sales rung up on this device that the server doesn't know about yet —
+  // without this, a sale made while offline wouldn't show up in "My Sales"
+  // at all until it syncs, which defeats the point of checking your own
+  // history *while* offline.
+  const unsyncedSales = useLiveQuery(
+    () => localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+
+  const mergedSales = useMemo(() => {
+    if (!isOwnHistory || unsyncedSales.length === 0) return sales;
+    const overlay: SaleHistoryRow[] = unsyncedSales
+      .filter((s) => !paymentFilter || s.paymentMethod === paymentFilter)
+      .map((s) => ({
+        id: s.clientId,
+        createdAt: s.createdAt,
+        total: s.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0),
+        paymentMethod: s.paymentMethod,
+        status: "COMPLETED",
+        items: s.items.map((i) => ({
+          id: i.productId,
+          name: i.name,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+          lineTotal: i.unitPrice * i.quantity,
+        })),
+        customer: s.customerName ? { name: s.customerName } : null,
+      }));
+    return [...overlay, ...sales].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [sales, unsyncedSales, isOwnHistory, paymentFilter]);
+
   // Groups the (already newest-first) sales history into per-day sections —
   // a long-tenured employee's "complete history" can span months, so a
   // calendar picker below jumps straight to a day instead of scrolling
@@ -90,7 +140,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
     const todayKey = dayKeyFor(new Date());
     const yesterdayKey = dayKeyFor(new Date(Date.now() - 86_400_000));
     const groups = new Map<string, SaleHistoryRow[]>();
-    for (const s of sales) {
+    for (const s of mergedSales) {
       const key = dayKeyFor(new Date(s.createdAt));
       (groups.get(key) ?? groups.set(key, []).get(key)!).push(s);
     }
@@ -109,7 +159,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
               }),
       sales: daySales,
     }));
-  }, [sales]);
+  }, [mergedSales]);
 
   // Which day's sales are on screen. Snaps to the most recent day whenever
   // the underlying sales change (a different employee, or the payment
@@ -118,7 +168,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
   useEffect(() => {
     setSelectedDayKey(salesByDay[0]?.dayKey ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sales]);
+  }, [mergedSales]);
   const activeDay = salesByDay.find((g) => g.dayKey === selectedDayKey) ?? null;
 
   // Admin-only: how the selected day's total breaks down by payment method
@@ -179,6 +229,13 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
           )}
         </div>
       </div>
+
+      {!error && stale && (
+        <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+          Offline — showing sales from {cachedAt ? new Date(cachedAt).toLocaleString("en-KE") : "the last time this device was online"}
+          {isOwnHistory ? ", plus anything you've sold on this device since" : ""}. Will update automatically once you're back online.
+        </div>
+      )}
 
       {isAdmin && !loading && !error && paymentTotals.length > 0 && (
         <div className="flex flex-col gap-2 border-b border-brand-border pb-3">
@@ -269,7 +326,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
       )}
       {!error && !loading && !activeDay && (
         <div className="py-6 text-sm text-brand-inkMuted">
-          {sales.length === 0
+          {mergedSales.length === 0
             ? `No sales${paymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[paymentFilter]}` : ""} yet.`
             : `No sales${paymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[paymentFilter]}` : ""} on ${
                 selectedDayKey ? formatDayKey(selectedDayKey) : "this date"
