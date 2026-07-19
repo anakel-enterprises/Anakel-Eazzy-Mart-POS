@@ -7,17 +7,37 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 export const reportsRouter = Router();
 reportsRouter.use(requireAuth, requirePermission("VIEW_REPORTS"));
 
-function startOfDay(d: Date) {
-  const copy = new Date(d);
-  copy.setHours(0, 0, 0, 0);
-  return copy;
+// Kenya (Africa/Nairobi, UTC+3) observes no DST, so a fixed offset is exact
+// year-round. The server process's own timezone is irrelevant here (and on
+// Vercel is UTC) — every "today"/day-bucket boundary below must be computed
+// against the store's actual local calendar day, not the server's. Using
+// `Date.prototype.setHours`/`.toISOString().slice(0, 10)` directly (as this
+// used to) silently uses the *server's* midnight instead, which for a
+// UTC-run server sits 3 hours after Nairobi's real midnight — any sale rung
+// up between local midnight and 3am gets misfiled under the previous
+// calendar day, and until the server's own day rolls over, "today" still
+// includes that entire extra tail of yesterday.
+const STORE_UTC_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+function startOfStoreDay(d: Date): Date {
+  const shifted = new Date(d.getTime() + STORE_UTC_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - STORE_UTC_OFFSET_MS);
+}
+
+function storeDayKey(d: Date): string {
+  return new Date(d.getTime() + STORE_UTC_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+function storeMonthKey(d: Date): string {
+  return new Date(d.getTime() + STORE_UTC_OFFSET_MS).toISOString().slice(0, 7);
 }
 
 reportsRouter.get(
   "/dashboard",
   asyncHandler(async (req, res) => {
     const storeId = req.auth!.storeId;
-    const today = startOfDay(new Date());
+    const today = startOfStoreDay(new Date());
     const weekAgo = new Date(today);
     weekAgo.setDate(weekAgo.getDate() - 6);
 
@@ -52,10 +72,10 @@ reportsRouter.get(
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekAgo);
       d.setDate(d.getDate() + i);
-      dayBuckets[d.toISOString().slice(0, 10)] = 0;
+      dayBuckets[storeDayKey(d)] = 0;
     }
     for (const sale of weekSales) {
-      const key = sale.createdAt.toISOString().slice(0, 10);
+      const key = storeDayKey(sale.createdAt);
       if (key in dayBuckets) dayBuckets[key] += Number(sale.total);
     }
 
@@ -241,7 +261,7 @@ reportsRouter.get(
     const spanMs = rangeTo.getTime() - rangeFrom.getTime();
     const spanDays = Math.max(1, Math.ceil(spanMs / (24 * 60 * 60 * 1000)));
     const granularity: "day" | "month" = spanDays <= 62 ? "day" : "month";
-    const bucketKey = (d: Date) => (granularity === "day" ? d.toISOString().slice(0, 10) : d.toISOString().slice(0, 7));
+    const bucketKey = (d: Date) => (granularity === "day" ? storeDayKey(d) : storeMonthKey(d));
 
     async function periodTotals(periodRange: ReturnType<typeof dateRangeWhere>, dateFilterActive: boolean) {
       const [salesAgg, saleItems, expensesAgg, incomeAgg] = await Promise.all([

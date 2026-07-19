@@ -59,8 +59,16 @@ function estimateSaleCogs(sale: PendingSale, productCost: Map<string, number>): 
   return sale.items.reduce((sum, item) => sum + (productCost.get(item.productId) ?? 0) * item.quantity, 0);
 }
 
-const dayKey = (iso: string) => new Date(iso).toISOString().slice(0, 10);
-const monthKey = (iso: string) => new Date(iso).toISOString().slice(0, 7);
+// Kenya (Africa/Nairobi, UTC+3) observes no DST, so a fixed offset is exact
+// year-round. Must match the server's identically-named helpers in
+// server/src/routes/reports.ts exactly — these keys are used to merge a
+// locally-queued sale into the day/month bucket the server already returned,
+// and the two sides mixing conventions (e.g. this using the browser's raw
+// `.toISOString()`, which is always UTC regardless of device timezone) would
+// silently misfile a bucket 3 hours off from where the server put it.
+const STORE_UTC_OFFSET_MS = 3 * 60 * 60 * 1000;
+const dayKey = (iso: string) => new Date(new Date(iso).getTime() + STORE_UTC_OFFSET_MS).toISOString().slice(0, 10);
+const monthKey = (iso: string) => new Date(new Date(iso).getTime() + STORE_UTC_OFFSET_MS).toISOString().slice(0, 7);
 
 export function filterSalesByRange(sales: PendingSale[], from?: Date, to?: Date): PendingSale[] {
   if (!from && !to) return sales;
@@ -82,8 +90,7 @@ export function overlayDashboard(
   cachedAt?: string | null
 ): DashboardData {
   const now = new Date();
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
+  const todayKey = dayKey(now.toISOString());
 
   // `data.todaysSalesTotal` means "today, as of cachedAt" — while offline
   // into a new calendar day, that's yesterday's total wearing today's
@@ -92,14 +99,7 @@ export function overlayDashboard(
   // actually happened today. Reset the day-scoped fields to zero so
   // "today" starts genuinely fresh; any sale actually rung up today on
   // this device is still added back in below via unsyncedSales.
-  //
-  // Compared against `now`, not `today` — `today` has been forced to local
-  // midnight, and re-serializing *that* through `dayKey` (which converts to
-  // UTC) silently shifts it onto the previous UTC day for any timezone
-  // ahead of UTC (e.g. Africa/Nairobi, UTC+3), which made this comparison
-  // spuriously "stale" on *every* load, including a perfectly fresh online
-  // one seconds old — collapsing today's real sales/transaction count to 0.
-  const cachedSnapshotIsFromAPastDay = !!cachedAt && dayKey(cachedAt) !== dayKey(now.toISOString());
+  const cachedSnapshotIsFromAPastDay = !!cachedAt && dayKey(cachedAt) !== todayKey;
 
   if (unsyncedSales.length === 0 && !cachedSnapshotIsFromAPastDay) return data;
 
@@ -111,11 +111,6 @@ export function overlayDashboard(
 
   for (const sale of unsyncedSales) {
     const total = estimateSaleTotal(sale);
-    const createdAt = new Date(sale.createdAt);
-    if (createdAt >= today) {
-      todaysSalesTotal += total;
-      todaysTransactionCount += 1;
-    }
     // Always creates the bucket if missing (not just adds to an existing
     // one) — a stale cached week can be missing today's bucket entirely
     // (e.g. it was fetched yesterday), and this is what actually puts
@@ -123,6 +118,10 @@ export function overlayDashboard(
     // the weekly total.
     const key = dayKey(sale.createdAt);
     weeklyMap.set(key, (weeklyMap.get(key) ?? 0) + total);
+    if (key === todayKey) {
+      todaysSalesTotal += total;
+      todaysTransactionCount += 1;
+    }
 
     for (const item of sale.items) {
       stockDelta.set(item.productId, (stockDelta.get(item.productId) ?? 0) + item.quantity);
