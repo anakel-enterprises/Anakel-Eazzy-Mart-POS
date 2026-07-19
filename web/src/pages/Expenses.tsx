@@ -3,6 +3,7 @@ import { api, ApiError } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+import { ClearableInput } from "../components/ClearableInput";
 
 interface Category {
   id: string;
@@ -130,7 +131,13 @@ export function Expenses() {
                 ))}
               </select>
               <input required type="number" min="0" step="0.01" placeholder="Amount (KSh)" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-              <input placeholder="Description" value={expenseForm.description} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+              <ClearableInput
+                placeholder="Description"
+                value={expenseForm.description}
+                onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
+                onClear={() => setExpenseForm({ ...expenseForm, description: "" })}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              />
               {error && <div className="col-span-full text-sm font-medium text-brand-warn">{error}</div>}
               <div className="col-span-full">
                 <Button type="submit">Submit for approval</Button>
@@ -142,9 +149,22 @@ export function Expenses() {
         {showForm && tab === "income" && (
           <Card>
             <form onSubmit={submitIncome} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-              <input required placeholder="Source (e.g. Airtime commission)" value={incomeForm.source} onChange={(e) => setIncomeForm({ ...incomeForm, source: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+              <ClearableInput
+                required
+                placeholder="Source (e.g. Airtime commission)"
+                value={incomeForm.source}
+                onChange={(e) => setIncomeForm({ ...incomeForm, source: e.target.value })}
+                onClear={() => setIncomeForm({ ...incomeForm, source: "" })}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              />
               <input required type="number" min="0" step="0.01" placeholder="Amount (KSh)" value={incomeForm.amount} onChange={(e) => setIncomeForm({ ...incomeForm, amount: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-              <input placeholder="Description" value={incomeForm.description} onChange={(e) => setIncomeForm({ ...incomeForm, description: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+              <ClearableInput
+                placeholder="Description"
+                value={incomeForm.description}
+                onChange={(e) => setIncomeForm({ ...incomeForm, description: e.target.value })}
+                onClear={() => setIncomeForm({ ...incomeForm, description: "" })}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              />
               {error && <div className="col-span-full text-sm font-medium text-brand-warn">{error}</div>}
               <div className="col-span-full">
                 <Button type="submit">Record income</Button>

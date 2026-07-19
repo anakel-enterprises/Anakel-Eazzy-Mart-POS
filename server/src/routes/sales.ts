@@ -296,15 +296,93 @@ salesRouter.post(
   })
 );
 
+// A cashier's own "undo" for a sale rung up moments ago with the wrong
+// items/payment method — not a general-purpose deletion tool. Reverses every
+// side effect POST /api/sales applied (stock, credit balance, coupon usage)
+// and marks the sale VOIDED rather than deleting it, so it stays in the
+// audit trail but drops out of every revenue report/dashboard figure, all of
+// which already filter to status: "COMPLETED" only.
+const VOID_WINDOW_MS = 15 * 60_000;
+
+salesRouter.post(
+  "/:id/void",
+  requirePermission("MAKE_SALES"),
+  asyncHandler(async (req, res) => {
+    const sale = await prisma.sale.findFirst({
+      where: { id: req.params.id, storeId: req.auth!.storeId },
+      include: { items: true },
+    });
+    if (!sale) {
+      res.status(404).json({ error: "Sale not found" });
+      return;
+    }
+    if (sale.status !== "COMPLETED") {
+      res.status(400).json({ error: `This sale is already ${sale.status.toLowerCase()} and can't be voided again` });
+      return;
+    }
+
+    const isOwnSale = sale.cashierId === req.auth!.userId;
+    if (!isOwnSale && req.auth!.role !== "ADMIN") {
+      res.status(403).json({ error: "You can only undo your own sales" });
+      return;
+    }
+    // Admins can void an older sale to fix a mistake found later; a cashier
+    // undoing their own ring-up only gets a short window right after, so
+    // this can't become a way to quietly erase old history.
+    const ageMs = Date.now() - sale.createdAt.getTime();
+    if (isOwnSale && req.auth!.role !== "ADMIN" && ageMs > VOID_WINDOW_MS) {
+      res.status(400).json({ error: "This sale is too old to undo yourself — ask an admin to void it instead." });
+      return;
+    }
+
+    const voided = await prisma.$transaction(async (tx) => {
+      for (const item of sale.items) {
+        await tx.product.update({ where: { id: item.productId }, data: { stockQty: { increment: item.quantity } } });
+      }
+      if (sale.paymentMethod === "CREDIT" && sale.customerId) {
+        await tx.customer.update({ where: { id: sale.customerId }, data: { creditBalance: { decrement: sale.total } } });
+      }
+      if (sale.couponId) {
+        await tx.coupon.update({ where: { id: sale.couponId }, data: { timesUsed: { decrement: 1 } } });
+      }
+      return tx.sale.update({
+        where: { id: sale.id },
+        data: { status: "VOIDED" },
+        include: { items: true, cashier: { select: { name: true } }, customer: { select: { name: true } } },
+      });
+    });
+
+    res.json(voided);
+  })
+);
+
 salesRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const { status, limit, cashierId, paymentMethod } = req.query;
+    // VIEW_REPORTS is what actually gates seeing the *store's* sales (the
+    // Reports "Employees" drill-down). Without it, this endpoint must not
+    // become a side door to everyone's sales history — a cashier can only
+    // ever see their own, whether that's because they explicitly asked for
+    // their own cashierId or because they didn't specify one at all (which
+    // a report-privileged caller uses to mean "the whole store").
+    const canViewAll = req.auth!.role === "ADMIN" || req.auth!.permissions.VIEW_REPORTS;
+    let cashierFilter: string | undefined;
+    if (typeof cashierId === "string") {
+      if (!canViewAll && cashierId !== req.auth!.userId) {
+        res.status(403).json({ error: "You can only view your own sales history" });
+        return;
+      }
+      cashierFilter = cashierId;
+    } else if (!canViewAll) {
+      cashierFilter = req.auth!.userId;
+    }
+
     const sales = await prisma.sale.findMany({
       where: {
         storeId: req.auth!.storeId,
         ...(typeof status === "string" ? { status: status as never } : {}),
-        ...(typeof cashierId === "string" ? { cashierId } : {}),
+        ...(cashierFilter ? { cashierId: cashierFilter } : {}),
         ...(typeof paymentMethod === "string" ? { paymentMethod: paymentMethod as never } : {}),
       },
       include: { items: true, cashier: { select: { name: true } }, customer: { select: { name: true } } },
@@ -312,7 +390,7 @@ salesRouter.get(
       // Scoped to one cashier (an employee's sales history), an explicit
       // limit aside, is meant to be complete rather than truncated at the
       // same default cap used for an unscoped "recent sales" list elsewhere.
-      take: typeof limit === "string" ? Number(limit) : cashierId ? undefined : 50,
+      take: typeof limit === "string" ? Number(limit) : cashierFilter ? undefined : 50,
     });
     res.json(sales);
   })

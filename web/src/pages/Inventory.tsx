@@ -6,6 +6,7 @@ import { localDb, type CachedProduct } from "../db/localDb";
 import { queueProductCreate, refreshProductCache } from "../lib/sync";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+import { ClearableInput } from "../components/ClearableInput";
 import { BarcodeLabel } from "../components/BarcodeLabel";
 import { ProductDetailModal } from "../components/ProductDetailModal";
 import { ImportProductsModal } from "../components/ImportProductsModal";
@@ -170,11 +171,13 @@ export function Inventory() {
         )}
 
         <div className="flex flex-wrap items-center gap-3">
-          <input
+          <ClearableInput
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onClear={() => setQuery("")}
             placeholder="Search by name, SKU, barcode, or category"
-            className="min-w-[220px] flex-1 rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
+            wrapperClassName="min-w-[220px] flex-1"
+            className="w-full rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
           />
           <div className="flex flex-wrap justify-end gap-3">
             <Button variant="secondary" onClick={() => setShowImport(true)}>
@@ -204,8 +207,15 @@ export function Inventory() {
         {showForm && (
           <Card>
             <form onSubmit={(e) => void handleSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-              <input required placeholder="Name" value={form.name} onChange={(e) => handleNameChange(e.target.value)} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-              <input
+              <ClearableInput
+                required
+                placeholder="Name"
+                value={form.name}
+                onChange={(e) => handleNameChange(e.target.value)}
+                onClear={() => handleNameChange("")}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              />
+              <ClearableInput
                 required
                 placeholder="SKU (auto-generated — edit if needed)"
                 value={form.sku}
@@ -213,9 +223,19 @@ export function Inventory() {
                   setSkuTouched(true);
                   setForm({ ...form, sku: e.target.value });
                 }}
+                onClear={() => {
+                  setSkuTouched(true);
+                  setForm({ ...form, sku: "" });
+                }}
                 className="rounded-lg border border-brand-border px-3 py-2 text-sm"
               />
-              <input placeholder="Barcode" value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+              <ClearableInput
+                placeholder="Barcode"
+                value={form.barcode}
+                onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                onClear={() => setForm({ ...form, barcode: "" })}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              />
               <select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
                 <option value="">No category</option>
                 {categories.map((c) => (

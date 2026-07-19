@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+import { ClearableInput } from "../components/ClearableInput";
 
 interface Supplier {
   id: string;
@@ -91,10 +92,35 @@ export function Suppliers() {
           {showForm && (
             <Card>
               <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-                <input required placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-                <input placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-                <input placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-                <input placeholder="Address" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+                <ClearableInput
+                  required
+                  placeholder="Name"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  onClear={() => setForm({ ...form, name: "" })}
+                  className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                />
+                <ClearableInput
+                  placeholder="Phone"
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  onClear={() => setForm({ ...form, phone: "" })}
+                  className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                />
+                <ClearableInput
+                  placeholder="Email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  onClear={() => setForm({ ...form, email: "" })}
+                  className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                />
+                <ClearableInput
+                  placeholder="Address"
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  onClear={() => setForm({ ...form, address: "" })}
+                  className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                />
                 {error && <div className="text-sm font-medium text-brand-warn">{error}</div>}
                 <Button type="submit">Save supplier</Button>
               </form>
@@ -145,7 +171,12 @@ export function Suppliers() {
               </label>
               <label className="flex-1 text-sm">
                 <span className="mb-1 block font-medium text-brand-ink">Description</span>
-                <input value={txForm.description} onChange={(e) => setTxForm({ ...txForm, description: e.target.value })} className="w-full rounded-lg border border-brand-border px-3 py-2" />
+                <ClearableInput
+                  value={txForm.description}
+                  onChange={(e) => setTxForm({ ...txForm, description: e.target.value })}
+                  onClear={() => setTxForm({ ...txForm, description: "" })}
+                  className="w-full rounded-lg border border-brand-border px-3 py-2"
+                />
               </label>
               <Button type="submit">Record</Button>
             </form>

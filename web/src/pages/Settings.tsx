@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+import { ClearableInput } from "../components/ClearableInput";
 
 interface Store {
   name: string;
@@ -67,9 +68,10 @@ function ResetDataSection() {
       </p>
       <label className="mb-3 block text-sm">
         <span className="mb-1 block font-medium text-brand-ink">Type DELETE to confirm</span>
-        <input
+        <ClearableInput
           value={confirmText}
           onChange={(e) => setConfirmText(e.target.value)}
+          onClear={() => setConfirmText("")}
           placeholder="DELETE"
           className="w-full rounded-lg border border-brand-border px-3 py-2"
         />
@@ -114,19 +116,39 @@ export function Settings() {
           <form onSubmit={handleSubmit} className="flex flex-col gap-3">
             <label className="text-sm">
               <span className="mb-1 block font-medium text-brand-ink">Store name</span>
-              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full rounded-lg border border-brand-border px-3 py-2" />
+              <ClearableInput
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onClear={() => setForm({ ...form, name: "" })}
+                className="w-full rounded-lg border border-brand-border px-3 py-2"
+              />
             </label>
             <label className="text-sm">
               <span className="mb-1 block font-medium text-brand-ink">Address</span>
-              <input value={form.address ?? ""} onChange={(e) => setForm({ ...form, address: e.target.value })} className="w-full rounded-lg border border-brand-border px-3 py-2" />
+              <ClearableInput
+                value={form.address ?? ""}
+                onChange={(e) => setForm({ ...form, address: e.target.value })}
+                onClear={() => setForm({ ...form, address: "" })}
+                className="w-full rounded-lg border border-brand-border px-3 py-2"
+              />
             </label>
             <label className="text-sm">
               <span className="mb-1 block font-medium text-brand-ink">Phone</span>
-              <input value={form.phone ?? ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full rounded-lg border border-brand-border px-3 py-2" />
+              <ClearableInput
+                value={form.phone ?? ""}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                onClear={() => setForm({ ...form, phone: "" })}
+                className="w-full rounded-lg border border-brand-border px-3 py-2"
+              />
             </label>
             <label className="text-sm">
               <span className="mb-1 block font-medium text-brand-ink">Currency</span>
-              <input value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} className="w-full rounded-lg border border-brand-border px-3 py-2" />
+              <ClearableInput
+                value={form.currency}
+                onChange={(e) => setForm({ ...form, currency: e.target.value })}
+                onClear={() => setForm({ ...form, currency: "" })}
+                className="w-full rounded-lg border border-brand-border px-3 py-2"
+              />
             </label>
             {saved && <div className="text-sm font-medium text-brand-accentText">Saved.</div>}
             <Button type="submit" className="w-fit">

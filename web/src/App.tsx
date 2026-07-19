@@ -6,6 +6,7 @@ import { canAccess, firstAccessiblePath, NAV_ITEMS } from "./lib/navItems";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Checkout } from "./pages/Checkout";
+import { MySales } from "./pages/MySales";
 import { Inventory } from "./pages/Inventory";
 import { CashRegisterPage } from "./pages/CashRegisterPage";
 import { Reports } from "./pages/Reports";
@@ -51,6 +52,7 @@ function AppRoutes() {
       <Route path="/login" element={<Login />} />
       <Route element={<ProtectedRoutes />}>
         <Route path="/" element={<DashboardRoute />} />
+        <Route path="/my-sales" element={<MySales />} />
       </Route>
       <Route element={<ProtectedRoutes roles={["ADMIN", "MANAGER", "CASHIER"]} />}>
         <Route path="/checkout" element={<Checkout />} />

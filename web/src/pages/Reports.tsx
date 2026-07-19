@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getCached } from "../lib/cachedFetch";
-import { api, ApiError } from "../lib/api";
+import { ApiError } from "../lib/api";
 import { downloadCsv } from "../lib/csv";
 import { SALES_SYNCED_EVENT } from "../lib/sync";
 import { localDb } from "../db/localDb";
 import { useAuth } from "../context/AuthContext";
-import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type PaymentMethod } from "../lib/paymentMethods";
 import {
   filterSalesByRange,
   overlayAnalytics,
@@ -26,13 +25,13 @@ import type {
   InventoryReport,
   ProfitLossReport,
   ProfitReport,
-  SaleHistoryRow,
   SalesSummary,
   SuppliersReport,
   TimeseriesPoint,
 } from "../types/reports";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+import { SalesHistoryPanel } from "../components/SalesHistoryPanel";
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
 const compactCurrencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", notation: "compact", maximumFractionDigits: 1 });
@@ -45,27 +44,6 @@ const INK_MUTED = "#65635d";
 const SURFACE = "#f9f8f5";
 const GRID = "#e9e8e4";
 const AVG_LINE = "#c9c6bd";
-
-// Calendar-day key in the viewer's local timezone (not UTC), so a sale made
-// at 11pm and one made just after midnight land in different day groups
-// exactly when a human would expect, not when UTC happens to roll over.
-function dayKeyFor(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-// Renders a "YYYY-MM-DD" day key as a full local date label — used for the
-// empty state when a date picked on the calendar has no sales. Parsed as
-// y/m/d components (not `new Date(dayKey)`) so it's built from the same
-// local-calendar-day meaning as dayKeyFor, not reinterpreted as UTC midnight.
-function formatDayKey(dayKey: string): string {
-  const [year, month, day] = dayKey.split("-").map(Number);
-  return new Date(year, month - 1, day).toLocaleDateString("en-KE", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-}
 
 function formatBucketLabel(label: string, granularity: "day" | "month"): string {
   if (granularity === "month") {
@@ -138,56 +116,10 @@ export function Reports() {
   // Drill-down for the Employees tab: clicking a row in "Sales by employee"
   // below selects a cashierId and shows their complete sale-by-sale history
   // (not scoped to the period selector above, unlike the summary it's
-  // attached to — the whole point of a history is to see everything).
+  // attached to — the whole point of a history is to see everything). The
+  // actual fetching/grouping/rendering lives in SalesHistoryPanel, shared
+  // with the self-service "My Sales" page.
   const [selectedEmployee, setSelectedEmployee] = useState<{ cashierId: string; name: string } | null>(null);
-  const [employeeSales, setEmployeeSales] = useState<SaleHistoryRow[]>([]);
-  const [employeeSalesLoading, setEmployeeSalesLoading] = useState(false);
-  const [employeeSalesError, setEmployeeSalesError] = useState<string | null>(null);
-  const [employeePaymentFilter, setEmployeePaymentFilter] = useState<PaymentMethod | "">("");
-  // Which row in the sales-history table (below) is expanded to show its
-  // line items + customer — at most one at a time, collapsed by default so
-  // the table stays scannable.
-  const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
-
-  // Groups the (already newest-first) sales history into per-day sections
-  // instead of one long mixed list, so e.g. a busy Saturday isn't scattered
-  // across the same continuous scroll as last Tuesday.
-  const salesByDay = useMemo(() => {
-    const todayKey = dayKeyFor(new Date());
-    const yesterdayKey = dayKeyFor(new Date(Date.now() - 86_400_000));
-    const groups = new Map<string, SaleHistoryRow[]>();
-    for (const s of employeeSales) {
-      const key = dayKeyFor(new Date(s.createdAt));
-      (groups.get(key) ?? groups.set(key, []).get(key)!).push(s);
-    }
-    return Array.from(groups.entries()).map(([dayKey, sales]) => ({
-      dayKey,
-      dayLabel:
-        dayKey === todayKey
-          ? "Today"
-          : dayKey === yesterdayKey
-            ? "Yesterday"
-            : new Date(sales[0].createdAt).toLocaleDateString("en-KE", {
-                weekday: "long",
-                day: "numeric",
-                month: "long",
-                year: "numeric",
-              }),
-      sales,
-    }));
-  }, [employeeSales]);
-
-  // Which day's sales are on screen — a dropdown jump instead of scrolling
-  // through every day at once, since a long-tenured employee's "complete
-  // history" can span months. Snaps to the most recent day whenever the
-  // underlying sales change (a different employee selected, or the payment
-  // filter changes what's in range).
-  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
-  useEffect(() => {
-    setSelectedDayKey(salesByDay[0]?.dayKey ?? null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employeeSales]);
-  const activeDay = salesByDay.find((g) => g.dayKey === selectedDayKey) ?? null;
 
   const { user } = useAuth();
   const currentUser = useMemo(() => ({ id: user?.id ?? "", name: user?.name ?? "You" }), [user]);
@@ -357,33 +289,6 @@ export function Reports() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, period, customFrom, customTo]);
-
-  useEffect(() => {
-    setExpandedSaleId(null);
-    if (!selectedEmployee) {
-      setEmployeeSales([]);
-      return;
-    }
-    let cancelled = false;
-    setEmployeeSalesLoading(true);
-    setEmployeeSalesError(null);
-    const params = new URLSearchParams({ cashierId: selectedEmployee.cashierId });
-    if (employeePaymentFilter) params.set("paymentMethod", employeePaymentFilter);
-    api
-      .get<SaleHistoryRow[]>(`/api/sales?${params.toString()}`)
-      .then((rows) => {
-        if (!cancelled) setEmployeeSales(rows);
-      })
-      .catch((err) => {
-        if (!cancelled) setEmployeeSalesError(err instanceof ApiError ? err.message : "Couldn't load sales history");
-      })
-      .finally(() => {
-        if (!cancelled) setEmployeeSalesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedEmployee, employeePaymentFilter]);
 
   function downloadPnl() {
     if (!displayProfitLoss) return;
@@ -848,10 +753,7 @@ export function Reports() {
                     {displayEmployees.map((e) => (
                       <button
                         key={e.cashierId}
-                        onClick={() => {
-                          setSelectedEmployee({ cashierId: e.cashierId, name: e.name });
-                          setEmployeePaymentFilter("");
-                        }}
+                        onClick={() => setSelectedEmployee({ cashierId: e.cashierId, name: e.name })}
                         className={`grid w-full grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-left text-sm hover:bg-brand-bg ${
                           selectedEmployee?.cashierId === e.cashierId ? "bg-brand-bg" : ""
                         }`}
@@ -871,127 +773,12 @@ export function Reports() {
             </Card>
 
             {selectedEmployee && (
-              <Card className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="font-display text-[15px] font-bold text-brand-ink">Sales history</div>
-                    <div className="text-xs text-brand-inkMuted">{selectedEmployee.name} · complete history, not limited to the period above</div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {salesByDay.length > 0 && (
-                      <input
-                        type="date"
-                        value={selectedDayKey ?? ""}
-                        min={salesByDay[salesByDay.length - 1]?.dayKey}
-                        max={salesByDay[0]?.dayKey}
-                        onChange={(e) => setSelectedDayKey(e.target.value || null)}
-                        aria-label="Pick a date"
-                        className="rounded-lg border border-brand-border px-3 py-2 text-sm"
-                      />
-                    )}
-                    <select
-                      value={employeePaymentFilter}
-                      onChange={(e) => setEmployeePaymentFilter(e.target.value as PaymentMethod | "")}
-                      className="rounded-lg border border-brand-border px-3 py-2 text-sm"
-                    >
-                      <option value="">All payment methods</option>
-                      {PAYMENT_METHODS.map((m) => (
-                        <option key={m} value={m}>
-                          {PAYMENT_METHOD_LABELS[m]}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => setSelectedEmployee(null)}
-                      aria-label="Close sales history"
-                      className="text-sm text-brand-inkMuted hover:text-brand-ink"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-
-                {employeeSalesError && <div className="text-sm font-medium text-brand-warn">{employeeSalesError}</div>}
-                {!employeeSalesError && employeeSalesLoading && <div className="text-sm text-brand-inkMuted">Loading…</div>}
-                {!employeeSalesError && !employeeSalesLoading && activeDay && (
-                  <div className="overflow-x-auto">
-                    <div className="min-w-[600px]">
-                      <div className="mb-1.5 flex items-baseline gap-2 rounded-md bg-brand-bg px-2 py-1.5">
-                        <span className="text-[12.5px] font-bold text-brand-ink">{activeDay.dayLabel}</span>
-                        <span className="text-[11px] text-brand-inkMuted">
-                          {activeDay.sales.length} sale{activeDay.sales.length === 1 ? "" : "s"} ·{" "}
-                          {currencyFmt.format(activeDay.sales.reduce((sum, s) => sum + Number(s.total), 0))}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
-                        <span>TIME</span>
-                        <span>ITEMS</span>
-                        <span>TOTAL</span>
-                        <span>PAYMENT</span>
-                        <span>STATUS</span>
-                      </div>
-                      {activeDay.sales.map((s) => {
-                        const createdAt = new Date(s.createdAt);
-                        const expanded = expandedSaleId === s.id;
-                        return (
-                          <div key={s.id} className="border-b border-brand-border/60">
-                            <button
-                              onClick={() => setExpandedSaleId(expanded ? null : s.id)}
-                              aria-expanded={expanded}
-                              className={`grid w-full grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] items-center gap-2 py-2.5 text-left text-sm hover:bg-brand-bg ${
-                                expanded ? "bg-brand-bg" : ""
-                              }`}
-                            >
-                              <span className="text-brand-inkMuted">{createdAt.toLocaleTimeString("en-KE", { hour: "numeric", minute: "2-digit" })}</span>
-                              <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
-                              <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
-                              <span className="text-brand-inkMuted">
-                                {PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}
-                              </span>
-                              <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
-                                {s.status}
-                              </span>
-                            </button>
-                            {expanded && (
-                              <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
-                                <div className="mb-2 text-xs font-semibold text-brand-inkMuted">
-                                  Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
-                                </div>
-                                <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
-                                  <span>ITEM</span>
-                                  <span>QTY</span>
-                                  <span>UNIT PRICE</span>
-                                  <span>LINE TOTAL</span>
-                                </div>
-                                {s.items.map((item) => (
-                                  <div key={item.id} className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/40 py-1.5 text-[13px]">
-                                    <span className="text-brand-ink">{item.name}</span>
-                                    <span className="text-brand-inkMuted">{item.quantity}</span>
-                                    <span className="text-brand-inkMuted">{currencyFmt.format(Number(item.unitPrice))}</span>
-                                    <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(item.lineTotal))}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                {!employeeSalesError && !employeeSalesLoading && !activeDay && (
-                  <div className="py-6 text-sm text-brand-inkMuted">
-                    {employeeSales.length === 0
-                      ? `No sales${employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} yet.`
-                      : `No sales${employeePaymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[employeePaymentFilter]}` : ""} on ${
-                          selectedDayKey ? formatDayKey(selectedDayKey) : "this date"
-                        }.`}
-                  </div>
-                )}
-                {!employeeSalesError && !employeeSalesLoading && activeDay && (
-                  <div className="text-xs text-brand-inkMuted">Tap a sale to see the items sold and which customer it went to.</div>
-                )}
-              </Card>
+              <SalesHistoryPanel
+                cashierId={selectedEmployee.cashierId}
+                employeeName={selectedEmployee.name}
+                description={`${selectedEmployee.name} · complete history, not limited to the period above`}
+                onClose={() => setSelectedEmployee(null)}
+              />
             )}
           </>
         )}

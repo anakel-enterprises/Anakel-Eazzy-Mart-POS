@@ -129,6 +129,7 @@ user's role isn't in the route's allowed list:
 |---|---|---|
 | `/login` | `Login` | public |
 | `/` | `Dashboard` (or a redirect — see below) | any authenticated user |
+| `/my-sales` | `MySales` | any authenticated user |
 | `/checkout` | `Checkout` | ADMIN, MANAGER, CASHIER |
 | `/register` | `CashRegisterPage` | ADMIN, MANAGER, CASHIER |
 | `/inventory` | `Inventory` | ADMIN, MANAGER, STOREKEEPER |
@@ -161,6 +162,44 @@ Dashboard specifically, so the caller is never reached at all in the normal case
 Every page renders inside a shared `Layout` (`Sidebar` + content column) and independently renders its
 own `Topbar` (title/subtitle + the offline/sync status pills — see below) — there's no single global
 page-header component doing this centrally.
+
+### Sales history, receipts, and undoing a sale
+
+`web/src/components/SalesHistoryPanel.tsx` is the shared per-employee sales history UI: a payment-method
+filter, a calendar date picker (jump straight to any day the employee has sales in, rather than scrolling
+a mixed list), and a tap-to-expand line-item + customer breakdown per sale. It's used two ways:
+
+- **`Reports.tsx`'s "Employees" tab** — an admin/manager/accountant (anyone with `VIEW_REPORTS`) selects
+  an employee from "Sales by employee" and gets their full history, with a ✕ to collapse back.
+- **`MySales.tsx`** (`/my-sales`) — every employee's *own* history, self-service, with no `VIEW_REPORTS`
+  requirement (see `lib/navItems.ts` — this nav item has no `permission` gate). The authorization half of
+  this lives server-side: `GET /api/sales` scopes a caller without `VIEW_REPORTS` to their own `cashierId`
+  regardless of what's requested — see [API.md](./API.md#get-apisales).
+
+`SalesHistoryPanel` also shows a per-payment-method totals strip (CASH/MPESA/CARD/.../CREDIT, each with its
+total and sale count) across everything currently loaded — but **only when the viewer is an `ADMIN`**
+(`useAuth()`'s `user.role`, checked client-side; this is a display-only convenience, not a security
+boundary, since the underlying sales data is already scoped by the server call above).
+
+**Undoing a sale** (`Checkout.tsx`'s "Sold the wrong thing? Undo this sale", shown on the "Sale complete"
+screen) is a cashier's short-window self-service correction, not a general void tool — see
+`POST /api/sales/:id/void` in [API.md](./API.md#post-apisalesidvoid) for the server-side rules (own sale,
+15-minute window, `ADMIN` can void anytime). `lib/sync.ts`'s `undoLastSale()` handles both cases a sale can
+be in at undo time: still only-local (never synced — just drop the queue row, nothing to reverse
+server-side) or already-synced (call the void endpoint, using the sale's captured `authToken` so it's voided
+as the original cashier regardless of who's logged in on the device now — same reasoning as
+`PendingSale.authToken`, see the sync engine section below). Either way, stock this device had
+optimistically decremented is restored, and the sale's cart is handed back to `Checkout.tsx` so the cashier
+can immediately re-ring it correctly instead of re-searching every item.
+
+**Printing a receipt** (`lib/receipt.ts`'s `printReceipt()`) opens a small popup window with a
+thermal-receipt-style HTML document (store name/address/phone, line items, subtotal/discount/total,
+payment method, change due, cashier and customer name) and calls the browser's print dialog on it — no
+native print-driver integration. It prints the same figures already shown on the "Sale complete" screen
+(what was actually charged/collected at the counter) rather than re-fetching the synced server total, so
+it's available offline and always matches what the cashier and customer already agreed on. Store
+name/address/phone are fetched via `getCached("/api/settings")` so the header still renders offline from
+whatever this device last saw.
 
 ### Session handling
 
@@ -422,6 +461,16 @@ offline layer already has (the product cache, the pending-sale queue). What the 
 above *doesn't* do on its own is reflect a sale rung up on **this** device after the last successful
 fetch — that's what the live overlay below is for.
 
+**Staying fresh across a day boundary**: a cached Dashboard snapshot's `todaysSalesTotal` means "today,
+as of `cachedAt`" — if a device goes offline and stays that way into a new calendar day, that figure is
+actually *yesterday's* total wearing today's label. `overlayDashboard()` takes `cachedAt` for exactly this
+reason: when it's from a different calendar day than "now" (compared via the same UTC-day-key convention
+the rest of this file already uses), the day-scoped fields (`todaysSalesTotal`, `todaysTransactionCount`)
+reset to zero before any of today's actually-unsynced local sales are added back in, so a new shift never
+inherits a stale prior day's number. The weekly chart gets the same treatment from the other direction: a
+missing "today" bucket (the cached week was fetched before today existed) is created on demand instead of
+silently dropping that day's sale from the total.
+
 ### Live overlay of unsynced sales
 
 The cache-fallback layer above only ever shows the server's last-known snapshot — it has no way to know
@@ -639,6 +688,12 @@ stat values, and a small consistent palette for status (`brand.accentText` green
 positive/active, `brand.warn` red/orange for danger/overdue/error). Shared primitives live in
 `web/src/components/ui.tsx` (`Card`, `StatCard`, `Switch`, `Button` with primary/secondary/danger
 variants).
+
+`web/src/components/ClearableInput.tsx` is a drop-in replacement for a plain `<input>` — same props plus
+a required `onClear`, given a small "×" appears (absolutely positioned, right-aligned) once the field has
+a value, clearing it in one tap. Used for every search box and most free-text fields across the app;
+deliberately not used for `type="number"`/`type="date"` (their own native controls already cover this) or
+`<select>`.
 
 ## Known gaps & deferred work
 

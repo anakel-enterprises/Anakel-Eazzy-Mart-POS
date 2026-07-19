@@ -1,11 +1,15 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb, newClientId, type CachedProduct, type SplitPaymentEntry } from "../db/localDb";
-import { queueSale, refreshProductCache } from "../lib/sync";
+import { queueSale, refreshProductCache, undoLastSale } from "../lib/sync";
 import { api, ApiError, isApiReachable } from "../lib/api";
+import { getCached } from "../lib/cachedFetch";
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS } from "../lib/paymentMethods";
+import { printReceipt, type ReceiptStore } from "../lib/receipt";
+import { useAuth } from "../context/AuthContext";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+import { ClearableInput } from "../components/ClearableInput";
 
 // The camera-scanning library is sizable and only needed once the modal
 // opens, so it's split into its own chunk instead of bloating the app shell.
@@ -46,7 +50,26 @@ export function Checkout() {
     { method: "CASH", amount: 0 },
     { method: "MPESA", amount: 0 },
   ]);
-  const [receipt, setReceipt] = useState<{ total: number; change: number } | null>(null);
+  // What just got rung up — kept around after resetPaymentState() clears the
+  // live payment form, both to render the "Sale complete" screen and so
+  // "Undo this sale"/"Print receipt" have everything they need (the cart,
+  // for a corrected re-ring; every other field, for a printable receipt)
+  // without the cashier having to search and re-add everything.
+  const [completedSale, setCompletedSale] = useState<{
+    clientId: string;
+    cart: CartLine[];
+    paymentMethod: (typeof PAYMENT_METHODS)[number];
+    amountTendered?: number;
+    changeDue: number;
+    subtotal: number;
+    total: number;
+    customerName?: string;
+    couponCode?: string;
+    createdAt: string;
+  } | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const [undoError, setUndoError] = useState<string | null>(null);
+  const [storeInfo, setStoreInfo] = useState<ReceiptStore | null>(null);
   const [showScanner, setShowScanner] = useState(false);
   const [couponCode, setCouponCode] = useState("");
   const [customerQuery, setCustomerQuery] = useState("");
@@ -63,12 +86,18 @@ export function Checkout() {
   const [mpesaError, setMpesaError] = useState<string | null>(null);
   const [mpesaReceiptNumber, setMpesaReceiptNumber] = useState<string | null>(null);
 
+  const { user } = useAuth();
+
   useEffect(() => {
     void isApiReachable().then((reachable) => {
       if (reachable) {
         void refreshProductCache();
       }
     });
+    // Store name/address/phone for the printable receipt header — cached
+    // via getCached so a receipt can still be printed offline using
+    // whatever this device last saw, not just when online.
+    void getCached<ReceiptStore>("/api/settings").then((res) => setStoreInfo(res.data)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -191,13 +220,14 @@ export function Checkout() {
     if (paymentMethod === "SPLIT" && splitRemaining > 0.01) return;
 
     const clientId = newClientId();
+    const createdAt = new Date().toISOString();
     await queueSale({
       clientId,
       items: cart.map((l) => ({ productId: l.product.id, name: l.product.name, quantity: l.quantity, unitPrice: l.product.price })),
       paymentMethod,
       amountTendered: paymentMethod === "CASH" ? tendered : undefined,
       status: "COMPLETED",
-      createdAt: new Date().toISOString(),
+      createdAt,
       customerId: customer?.id,
       customerName: customer?.name,
       couponCode: couponCode.trim() || undefined,
@@ -211,8 +241,59 @@ export function Checkout() {
         if (p) await localDb.products.update(p.id, { stockQty: p.stockQty - line.quantity });
       }
     });
-    setReceipt({ total, change: changeDue });
+    setCompletedSale({
+      clientId,
+      cart,
+      paymentMethod,
+      amountTendered: paymentMethod === "CASH" ? tendered : undefined,
+      changeDue,
+      subtotal,
+      total,
+      customerName: customer?.name,
+      couponCode: couponCode.trim() || undefined,
+      createdAt,
+    });
+    setUndoError(null);
     resetPaymentState();
+  }
+
+  // Reverses the sale just completed — a cashier's "I picked the wrong
+  // payment method" recovery, not a general void tool (see
+  // lib/sync.ts's undoLastSale and the server's own short time window for
+  // anyone other than an admin). Restores the cart so the sale can be redone
+  // correctly instead of re-searching and re-adding every item.
+  async function undoSale() {
+    if (!completedSale) return;
+    setUndoing(true);
+    setUndoError(null);
+    const result = await undoLastSale(completedSale.clientId);
+    setUndoing(false);
+    if (!result.ok) {
+      setUndoError(result.message ?? "Couldn't undo this sale");
+      return;
+    }
+    setCart(completedSale.cart);
+    setCompletedSale(null);
+  }
+
+  function printCompletedReceipt() {
+    if (!completedSale) return;
+    printReceipt(
+      {
+        clientId: completedSale.clientId,
+        createdAt: completedSale.createdAt,
+        lines: completedSale.cart.map((l) => ({ name: l.product.name, quantity: l.quantity, unitPrice: l.product.price })),
+        subtotal: completedSale.subtotal,
+        total: completedSale.total,
+        paymentMethod: completedSale.paymentMethod,
+        amountTendered: completedSale.amountTendered,
+        changeDue: completedSale.changeDue,
+        customerName: completedSale.customerName,
+        couponCode: completedSale.couponCode,
+        cashierName: user?.name ?? "—",
+      },
+      storeInfo
+    );
   }
 
   // Live M-Pesa checkout has no offline path — the STK push itself needs
@@ -317,12 +398,14 @@ export function Checkout() {
       <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6 lg:grid lg:grid-cols-[1.3fr_1fr] lg:overflow-hidden lg:p-8">
         <div className="flex flex-col gap-4 lg:overflow-hidden">
           <div className="flex flex-wrap gap-2">
-            <input
+            <ClearableInput
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onClear={() => setQuery("")}
               placeholder="Search products, orders… or scan a barcode"
-              className="min-w-[200px] flex-1 rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
+              wrapperClassName="min-w-[200px] flex-1"
+              className="w-full rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
             />
             <Button variant="secondary" onClick={() => setShowScanner(true)}>
               Scan
@@ -449,10 +532,11 @@ export function Checkout() {
           {paymentMethod === "MPESA" && (
             <div className="text-sm">
               <span className="mb-1 block font-medium text-brand-ink">Customer's phone number</span>
-              <input
+              <ClearableInput
                 type="tel"
                 value={mpesaPhone}
                 onChange={(e) => setMpesaPhone(e.target.value)}
+                onClear={() => setMpesaPhone("")}
                 placeholder="07XX XXX XXX"
                 disabled={mpesaStatus === "sending" || mpesaStatus === "waiting"}
                 className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep disabled:bg-brand-bg"
@@ -553,17 +637,19 @@ export function Checkout() {
                 </div>
               ) : showNewCustomerForm ? (
                 <div className="flex flex-col gap-2 rounded-lg border border-brand-border p-3">
-                  <input
+                  <ClearableInput
                     autoFocus
                     required
                     value={newCustomerName}
                     onChange={(e) => setNewCustomerName(e.target.value)}
+                    onClear={() => setNewCustomerName("")}
                     placeholder="Customer name"
                     className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
                   />
-                  <input
+                  <ClearableInput
                     value={newCustomerPhone}
                     onChange={(e) => setNewCustomerPhone(e.target.value)}
+                    onClear={() => setNewCustomerPhone("")}
                     placeholder="Phone number (optional)"
                     className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
                   />
@@ -588,9 +674,10 @@ export function Checkout() {
                 </div>
               ) : (
                 <div className="relative">
-                  <input
+                  <ClearableInput
                     value={customerQuery}
                     onChange={(e) => setCustomerQuery(e.target.value)}
+                    onClear={() => setCustomerQuery("")}
                     placeholder="Search customer by name or phone"
                     className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
                   />
@@ -626,9 +713,10 @@ export function Checkout() {
 
           <label className="text-sm">
             <span className="mb-1 block font-medium text-brand-ink">Coupon code (optional)</span>
-            <input
+            <ClearableInput
               value={couponCode}
               onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+              onClear={() => setCouponCode("")}
               placeholder="e.g. SAVE50"
               className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
             />
@@ -677,20 +765,38 @@ export function Checkout() {
         </Card>
       </div>
 
-      {receipt && (
+      {completedSale && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4">
           <Card className="w-full max-w-xs text-center">
             <div className="mb-2 font-display text-lg font-bold text-brand-ink">Sale complete</div>
             <div className="mb-1 text-sm text-brand-inkMuted">Total charged</div>
-            <div className="mb-3 text-2xl font-bold text-brand-ink">{currencyFmt.format(receipt.total)}</div>
-            {receipt.change > 0 && (
+            <div className="mb-3 text-2xl font-bold text-brand-ink">{currencyFmt.format(completedSale.total)}</div>
+            {completedSale.changeDue > 0 && (
               <div className="mb-4 text-sm font-semibold text-brand-accentText">
-                Change due: {currencyFmt.format(receipt.change)}
+                Change due: {currencyFmt.format(completedSale.changeDue)}
               </div>
             )}
-            <Button className="w-full" onClick={() => setReceipt(null)}>
+            {undoError && <div className="mb-3 text-xs font-medium text-brand-warn">{undoError}</div>}
+            <Button className="w-full" onClick={printCompletedReceipt}>
+              Print receipt
+            </Button>
+            <Button
+              variant="secondary"
+              className="mt-2 w-full"
+              onClick={() => {
+                setCompletedSale(null);
+                setUndoError(null);
+              }}
+            >
               New sale
             </Button>
+            <button
+              onClick={() => void undoSale()}
+              disabled={undoing}
+              className="mt-2 w-full text-xs font-semibold text-brand-inkMuted hover:text-brand-warn disabled:opacity-60"
+            >
+              {undoing ? "Undoing…" : "Sold the wrong thing? Undo this sale"}
+            </button>
           </Card>
         </div>
       )}

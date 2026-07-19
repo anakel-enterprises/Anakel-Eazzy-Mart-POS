@@ -2,6 +2,7 @@ import { useState } from "react";
 import { isLocalProductId } from "../db/localDb";
 import { patchPendingProduct, queueProductDelete, queueProductEdit, queueStockAdjustment } from "../lib/sync";
 import { Button, Card } from "./ui";
+import { ClearableInput } from "./ClearableInput";
 
 export interface ProductDetail {
   id: string;
@@ -124,7 +125,12 @@ export function ProductDetailModal({
         <div className="flex flex-col gap-3">
           <label className="text-sm">
             <span className="mb-1 block font-medium text-brand-ink">Product name</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-lg border border-brand-border px-3 py-2" />
+            <ClearableInput
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onClear={() => setName("")}
+              className="w-full rounded-lg border border-brand-border px-3 py-2"
+            />
           </label>
 
           <div className="text-xs text-brand-inkMuted">SKU: {product.sku}</div>

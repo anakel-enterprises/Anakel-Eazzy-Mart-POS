@@ -46,6 +46,10 @@ export interface PendingSale {
   // be the active session's at the time. Optional only for rows queued
   // before this field existed.
   authToken?: string;
+  // The real server-assigned Sale id, set once this row's POST actually
+  // succeeds. Undoing a sale after it's synced needs this to call
+  // POST /api/sales/:id/void — the clientId is only meaningful locally.
+  serverId?: string;
   customerId?: string;
   // Local-only — never sent to the server (which already knows the name via
   // the customerId relation). Kept here purely so the offline stats overlay

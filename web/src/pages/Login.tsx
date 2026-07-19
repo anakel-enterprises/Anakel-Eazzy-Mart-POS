@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui";
+import { ClearableInput } from "../components/ClearableInput";
 
 export function Login() {
   const { login, sessionExpired, sessionTimedOut } = useAuth();
@@ -46,11 +47,12 @@ export function Login() {
 
         <label className="mb-3 block text-sm">
           <span className="mb-1 block font-medium text-brand-ink">Email</span>
-          <input
+          <ClearableInput
             type="text"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onClear={() => setEmail("")}
             className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
             placeholder="email/username"
           />
@@ -58,11 +60,12 @@ export function Login() {
 
         <label className="mb-4 block text-sm">
           <span className="mb-1 block font-medium text-brand-ink">Password</span>
-          <input
+          <ClearableInput
             type="password"
             required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            onClear={() => setPassword("")}
             className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
           />
         </label>

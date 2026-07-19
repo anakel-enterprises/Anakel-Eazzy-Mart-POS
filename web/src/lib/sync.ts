@@ -130,12 +130,10 @@ async function doFlushPendingSales(): Promise<{ synced: number; failed: number }
       // logged in on this device right now — see PendingSale.authToken.
       // Only rows queued before that field existed fall back to the
       // ambient session's token.
-      if (sale.authToken) {
-        await api.postAsUser("/api/sales", payload, sale.authToken);
-      } else {
-        await api.post("/api/sales", payload);
-      }
-      await localDb.pendingSales.update(sale.clientId, { syncStatus: "synced" });
+      const created = sale.authToken
+        ? await api.postAsUser<{ id: string }>("/api/sales", payload, sale.authToken)
+        : await api.post<{ id: string }>("/api/sales", payload);
+      await localDb.pendingSales.update(sale.clientId, { syncStatus: "synced", serverId: created.id });
       synced++;
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Network error";
@@ -150,6 +148,59 @@ async function doFlushPendingSales(): Promise<{ synced: number; failed: number }
   }
 
   return { synced, failed };
+}
+
+export interface UndoSaleResult {
+  ok: boolean;
+  message?: string;
+  items?: PendingSale["items"];
+}
+
+// Reverses a sale just rung up on this device — moments-later "I sold that
+// with the wrong payment method" territory, not a general void tool (the
+// server enforces its own short time window for a non-admin; see
+// POST /api/sales/:id/void). Restores the stock this device had
+// optimistically decremented, and either just drops the local queue row (if
+// it never actually reached the server yet — nothing to reverse there) or
+// voids the now-synced sale server-side. Either way, hands back the sale's
+// line items so Checkout can restore them to the cart for a corrected re-ring.
+export async function undoLastSale(clientId: string): Promise<UndoSaleResult> {
+  const row = await localDb.pendingSales.get(clientId);
+  if (!row) return { ok: false, message: "This sale can no longer be found on this device." };
+
+  if (row.syncStatus === "synced") {
+    if (!row.serverId) {
+      return {
+        ok: false,
+        message: "This sale synced before undo support existed on this device — void it from Reports instead.",
+      };
+    }
+    try {
+      const token = row.authToken;
+      if (token) {
+        await api.postAsUser(`/api/sales/${row.serverId}/void`, {}, token);
+      } else {
+        await api.post(`/api/sales/${row.serverId}/void`, {});
+      }
+    } catch (err) {
+      return { ok: false, message: err instanceof ApiError ? err.message : "Couldn't undo this sale — check your connection." };
+    }
+  }
+
+  await localDb.transaction("rw", localDb.products, localDb.pendingSales, async () => {
+    for (const item of row.items) {
+      const p = await localDb.products.get(item.productId);
+      if (p) await localDb.products.update(p.id, { stockQty: p.stockQty + item.quantity });
+    }
+    await localDb.pendingSales.delete(clientId);
+  });
+
+  if (row.syncStatus === "synced") {
+    void refreshProductCache();
+    window.dispatchEvent(new Event(SALES_SYNCED_EVENT));
+  }
+
+  return { ok: true, items: row.items };
 }
 
 export interface NewProductInput {

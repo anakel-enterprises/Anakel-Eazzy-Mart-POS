@@ -31,8 +31,9 @@ export function Dashboard() {
   );
 
   const displayData = useMemo(
-    () => (data ? overlayDashboard(data, unsyncedSales, { id: user?.id ?? "", name: user?.name ?? "You" }) : null),
-    [data, unsyncedSales, user]
+    () =>
+      data ? overlayDashboard(data, unsyncedSales, { id: user?.id ?? "", name: user?.name ?? "You" }, cachedAt) : null,
+    [data, unsyncedSales, user, cachedAt]
   );
 
   useEffect(() => {

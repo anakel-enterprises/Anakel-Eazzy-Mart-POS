@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+import { ClearableInput } from "../components/ClearableInput";
 
 interface Promotion {
   id: string;
@@ -122,7 +123,14 @@ export function Promotions() {
         {showForm && tab === "promotions" && (
           <Card>
             <form onSubmit={submitPromotion} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-              <input required placeholder="Name (e.g. Weekend 10% Off)" value={promoForm.name} onChange={(e) => setPromoForm({ ...promoForm, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+              <ClearableInput
+                required
+                placeholder="Name (e.g. Weekend 10% Off)"
+                value={promoForm.name}
+                onChange={(e) => setPromoForm({ ...promoForm, name: e.target.value })}
+                onClear={() => setPromoForm({ ...promoForm, name: "" })}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              />
               <select value={promoForm.type} onChange={(e) => setPromoForm({ ...promoForm, type: e.target.value as Promotion["type"] })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
                 <option value="PERCENTAGE_DISCOUNT">Percentage discount (storewide)</option>
                 <option value="FIXED_DISCOUNT">Fixed discount (storewide)</option>
@@ -151,7 +159,14 @@ export function Promotions() {
         {showForm && tab === "coupons" && (
           <Card>
             <form onSubmit={submitCoupon} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
-              <input required placeholder="Code (e.g. SAVE50)" value={couponForm.code} onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+              <ClearableInput
+                required
+                placeholder="Code (e.g. SAVE50)"
+                value={couponForm.code}
+                onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })}
+                onClear={() => setCouponForm({ ...couponForm, code: "" })}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              />
               <select value={couponForm.discountType} onChange={(e) => setCouponForm({ ...couponForm, discountType: e.target.value as Coupon["discountType"] })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
                 <option value="PERCENTAGE">Percentage</option>
                 <option value="FIXED">Fixed amount</option>

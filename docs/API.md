@@ -176,7 +176,8 @@ Lists that product's adjustment history, newest first, each including the acting
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/api/sales/` | perm:MAKE_SALES | Ring up (or replay) a sale — the core checkout endpoint |
-| GET | `/api/sales/` | auth | List recent sales |
+| GET | `/api/sales/` | auth | List sales — scope depends on the caller, see below |
+| POST | `/api/sales/:id/void` | perm:MAKE_SALES | Undo a just-completed sale — see below |
 | GET | `/api/sales/held` | auth | List currently held (parked) sales |
 
 ### POST `/api/sales/`
@@ -256,9 +257,30 @@ sale; `200` with the pre-existing `Sale` (including `items` only) on an idempote
 Query: `status` (optional filter), `cashierId` (optional filter — an employee's sales history), `paymentMethod`
 (optional filter), `limit` (optional). Returns sales for the store including `items`, the cashier's name, and the
 customer's name (`null` for a walk-in sale with no stored customer), newest first. Default `limit` is `50`,
-**except** when `cashierId` is given: an employee's own sales history is returned in full (no cap) unless `limit`
-is passed explicitly, since "recent sales" and "one employee's complete history" are different use cases with
-different expectations of completeness.
+**except** when scoped to one cashier (see below): that employee's history is returned in full (no cap) unless
+`limit` is passed explicitly, since "recent sales" and "one employee's complete history" are different use cases
+with different expectations of completeness.
+
+**Authorization scoping** (this is what makes the self-service "My Sales" page — see
+[ARCHITECTURE.md](./ARCHITECTURE.md) — safe to expose to every role without `VIEW_REPORTS`): a caller with
+`VIEW_REPORTS` (or `ADMIN`) can pass any `cashierId`, or omit it for the whole store's sales, same as always.
+Without `VIEW_REPORTS`, `cashierId` — if given — must equal the caller's own user id (`403 You can only view your
+own sales history` otherwise), and omitting it entirely scopes the query to the caller's own sales rather than the
+whole store.
+
+### POST `/api/sales/:id/void`
+
+A cashier's own "undo" for a sale rung up moments ago with the wrong items/payment method — not a general
+void/refund tool. No body. Requires the sale to currently be `status: COMPLETED` (`400` if it's already
+`VOIDED`/`REFUNDED`/`HELD`). Only the sale's own cashier or an `ADMIN` may void it (`403` otherwise); a non-admin
+can only void their own sale within **15 minutes** of `createdAt` (`400` past that — an admin can void an older
+sale any time, to fix a mistake found later).
+
+Reverses every side effect the original `POST /api/sales` applied: increments each item's `Product.stockQty` back,
+decrements the customer's `creditBalance` if it was a `CREDIT` sale, decrements a used coupon's `timesUsed`. Sets
+`status: VOIDED` (not deleted — it stays in the audit trail) and returns the updated `Sale`. Every revenue-facing
+report/dashboard query already filters to `status: "COMPLETED"` only, so a voided sale disappears from all of them
+automatically — no separate cleanup needed there.
 
 ### GET `/api/sales/held`
 

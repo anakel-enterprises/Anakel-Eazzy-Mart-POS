@@ -75,15 +75,28 @@ export function filterSalesByRange(sales: PendingSale[], from?: Date, to?: Date)
 export function overlayDashboard(
   data: DashboardData,
   unsyncedSales: PendingSale[],
-  currentUser: { id: string; name: string }
+  currentUser: { id: string; name: string },
+  // When this snapshot was actually fetched from the server (see
+  // getCached's CachedResult.cachedAt) — null/undefined only for a fresh
+  // live fetch, where staleness obviously doesn't apply.
+  cachedAt?: string | null
 ): DashboardData {
-  if (unsyncedSales.length === 0) return data;
-
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  let todaysSalesTotal = num(data.todaysSalesTotal);
-  let todaysTransactionCount = num(data.todaysTransactionCount);
+  // `data.todaysSalesTotal` means "today, as of cachedAt" — while offline
+  // into a new calendar day, that's yesterday's total wearing today's
+  // label. Carrying it forward would silently show a brand-new shift's
+  // stats as if they already included a full day of sales that never
+  // actually happened today. Reset the day-scoped fields to zero so
+  // "today" starts genuinely fresh; any sale actually rung up today on
+  // this device is still added back in below via unsyncedSales.
+  const cachedSnapshotIsFromAPastDay = !!cachedAt && dayKey(cachedAt) !== dayKey(today.toISOString());
+
+  if (unsyncedSales.length === 0 && !cachedSnapshotIsFromAPastDay) return data;
+
+  let todaysSalesTotal = cachedSnapshotIsFromAPastDay ? 0 : num(data.todaysSalesTotal);
+  let todaysTransactionCount = cachedSnapshotIsFromAPastDay ? 0 : num(data.todaysTransactionCount);
   const weeklyMap = new Map(data.weeklySales.map((d) => [d.date, num(d.total)]));
   const stockDelta = new Map<string, number>();
   const extraRecent: DashboardData["recentSales"] = [];
@@ -95,8 +108,13 @@ export function overlayDashboard(
       todaysSalesTotal += total;
       todaysTransactionCount += 1;
     }
+    // Always creates the bucket if missing (not just adds to an existing
+    // one) — a stale cached week can be missing today's bucket entirely
+    // (e.g. it was fetched yesterday), and this is what actually puts
+    // today's bar on the chart instead of silently dropping the sale from
+    // the weekly total.
     const key = dayKey(sale.createdAt);
-    if (weeklyMap.has(key)) weeklyMap.set(key, (weeklyMap.get(key) ?? 0) + total);
+    weeklyMap.set(key, (weeklyMap.get(key) ?? 0) + total);
 
     for (const item of sale.items) {
       stockDelta.set(item.productId, (stockDelta.get(item.productId) ?? 0) + item.quantity);
@@ -132,7 +150,9 @@ export function overlayDashboard(
   return {
     todaysSalesTotal,
     todaysTransactionCount,
-    weeklySales: data.weeklySales.map((d) => ({ date: d.date, total: weeklyMap.get(d.date) ?? num(d.total) })),
+    weeklySales: Array.from(weeklyMap.entries())
+      .map(([date, total]) => ({ date, total }))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
     lowStock,
     recentSales,
   };

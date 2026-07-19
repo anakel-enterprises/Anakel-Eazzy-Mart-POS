@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { Topbar } from "../components/Topbar";
 import { Button, Card, Switch } from "../components/ui";
+import { ClearableInput } from "../components/ClearableInput";
 import type { PermissionCatalogEntry, PermissionMap } from "../lib/permissions";
 
 type Role = "ADMIN" | "MANAGER" | "CASHIER" | "STOREKEEPER" | "ACCOUNTANT";
@@ -195,10 +196,43 @@ export function Employees() {
           {showForm && (
             <Card>
               <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <input required placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-                <input required type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-                <input required type="password" minLength={8} placeholder="Temporary password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
-                <input required type="password" minLength={8} placeholder="Confirm password" value={form.confirmPassword} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
+                <ClearableInput
+                  required
+                  placeholder="Full name"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  onClear={() => setForm({ ...form, name: "" })}
+                  className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                />
+                <ClearableInput
+                  required
+                  type="email"
+                  placeholder="Email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  onClear={() => setForm({ ...form, email: "" })}
+                  className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                />
+                <ClearableInput
+                  required
+                  type="password"
+                  minLength={8}
+                  placeholder="Temporary password"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  onClear={() => setForm({ ...form, password: "" })}
+                  className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                />
+                <ClearableInput
+                  required
+                  type="password"
+                  minLength={8}
+                  placeholder="Confirm password"
+                  value={form.confirmPassword}
+                  onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+                  onClear={() => setForm({ ...form, confirmPassword: "" })}
+                  className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+                />
                 <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
                   {Object.entries(ROLE_LABELS).map(([value, label]) => (
                     <option key={value} value={value}>
@@ -250,18 +284,20 @@ export function Employees() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="text-sm">
                   <span className="mb-1 block font-medium text-brand-ink">Full name</span>
-                  <input
+                  <ClearableInput
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
+                    onClear={() => setEditName("")}
                     className="w-full rounded-lg border border-brand-border px-3 py-2"
                   />
                 </label>
                 <label className="text-sm">
                   <span className="mb-1 block font-medium text-brand-ink">Email</span>
-                  <input
+                  <ClearableInput
                     type="email"
                     value={editEmail}
                     onChange={(e) => setEditEmail(e.target.value)}
+                    onClear={() => setEditEmail("")}
                     className="w-full rounded-lg border border-brand-border px-3 py-2"
                   />
                 </label>
@@ -304,23 +340,25 @@ export function Employees() {
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <label className="text-sm">
                       <span className="mb-1 block font-medium text-brand-ink">New password</span>
-                      <input
+                      <ClearableInput
                         type="password"
                         minLength={8}
                         autoFocus
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
+                        onClear={() => setNewPassword("")}
                         placeholder="At least 8 characters"
                         className="w-full rounded-lg border border-brand-border px-3 py-2 text-sm"
                       />
                     </label>
                     <label className="text-sm">
                       <span className="mb-1 block font-medium text-brand-ink">Confirm password</span>
-                      <input
+                      <ClearableInput
                         type="password"
                         minLength={8}
                         value={confirmNewPassword}
                         onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        onClear={() => setConfirmNewPassword("")}
                         placeholder="Re-enter the password"
                         className="w-full rounded-lg border border-brand-border px-3 py-2 text-sm"
                       />

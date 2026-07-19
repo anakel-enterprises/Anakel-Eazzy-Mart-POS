@@ -22,6 +22,12 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", letter: "D", permission: "VIEW_REPORTS" },
   { to: "/checkout", label: "Checkout", letter: "C", permission: "MAKE_SALES" },
+  // No permission gate — every employee can see their own sales regardless
+  // of whether they have VIEW_REPORTS (that's store-wide reporting, this is
+  // just "what have I personally sold"). The server enforces the same
+  // self-only scoping independently (see GET /api/sales), so this isn't
+  // the only thing standing between an employee and someone else's history.
+  { to: "/my-sales", label: "My Sales", letter: "MS" },
   { to: "/inventory", label: "Inventory", letter: "I", permission: "MANAGE_PRODUCTS" },
   { to: "/register", label: "Cash Register", letter: "R", permission: "MAKE_SALES" },
   { to: "/suppliers", label: "Suppliers", letter: "SU", permission: "MANAGE_SUPPLIERS" },
