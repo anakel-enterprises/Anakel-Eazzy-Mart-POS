@@ -81,7 +81,8 @@ export function overlayDashboard(
   // live fetch, where staleness obviously doesn't apply.
   cachedAt?: string | null
 ): DashboardData {
-  const today = new Date();
+  const now = new Date();
+  const today = new Date(now);
   today.setHours(0, 0, 0, 0);
 
   // `data.todaysSalesTotal` means "today, as of cachedAt" — while offline
@@ -91,7 +92,14 @@ export function overlayDashboard(
   // actually happened today. Reset the day-scoped fields to zero so
   // "today" starts genuinely fresh; any sale actually rung up today on
   // this device is still added back in below via unsyncedSales.
-  const cachedSnapshotIsFromAPastDay = !!cachedAt && dayKey(cachedAt) !== dayKey(today.toISOString());
+  //
+  // Compared against `now`, not `today` — `today` has been forced to local
+  // midnight, and re-serializing *that* through `dayKey` (which converts to
+  // UTC) silently shifts it onto the previous UTC day for any timezone
+  // ahead of UTC (e.g. Africa/Nairobi, UTC+3), which made this comparison
+  // spuriously "stale" on *every* load, including a perfectly fresh online
+  // one seconds old — collapsing today's real sales/transaction count to 0.
+  const cachedSnapshotIsFromAPastDay = !!cachedAt && dayKey(cachedAt) !== dayKey(now.toISOString());
 
   if (unsyncedSales.length === 0 && !cachedSnapshotIsFromAPastDay) return data;
 

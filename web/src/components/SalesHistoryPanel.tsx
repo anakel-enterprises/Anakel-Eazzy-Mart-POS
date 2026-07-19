@@ -121,14 +121,14 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
   }, [sales]);
   const activeDay = salesByDay.find((g) => g.dayKey === selectedDayKey) ?? null;
 
-  // Admin-only: how this history's total breaks down by payment method —
-  // across everything currently loaded (every day, minus whatever payment
-  // filter is applied above), not just the one day on screen. Not shown to
-  // the employee viewing their own history via "My Sales".
+  // Admin-only: how the selected day's total breaks down by payment method
+  // — scoped to whichever day the date picker above has on screen (plus
+  // whatever payment filter is applied), not the employee's entire history.
+  // Not shown to the employee viewing their own history via "My Sales".
   const paymentTotals = useMemo(() => {
-    if (!isAdmin) return [];
+    if (!isAdmin || !activeDay) return [];
     const totals = new Map<string, { total: number; count: number }>();
-    for (const s of sales) {
+    for (const s of activeDay.sales) {
       const entry = totals.get(s.paymentMethod) ?? { total: 0, count: 0 };
       entry.total += Number(s.total);
       entry.count += 1;
@@ -137,7 +137,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
     return Array.from(totals.entries())
       .map(([method, v]) => ({ method, ...v }))
       .sort((a, b) => b.total - a.total);
-  }, [sales, isAdmin]);
+  }, [activeDay, isAdmin]);
 
   return (
     <Card className="flex flex-col gap-3">
@@ -181,18 +181,23 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
       </div>
 
       {isAdmin && !loading && !error && paymentTotals.length > 0 && (
-        <div className="flex flex-wrap gap-2 border-b border-brand-border pb-3">
-          {paymentTotals.map((t) => (
-            <div key={t.method} className="rounded-lg bg-brand-bg px-3 py-2">
-              <div className="text-[10.5px] font-semibold uppercase tracking-wide text-brand-inkMuted">
-                {PAYMENT_METHOD_LABELS[t.method as PaymentMethod] ?? t.method}
+        <div className="flex flex-col gap-2 border-b border-brand-border pb-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-brand-inkMuted">
+            Payment totals — {activeDay?.dayLabel}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {paymentTotals.map((t) => (
+              <div key={t.method} className="rounded-lg bg-brand-bg px-3 py-2">
+                <div className="text-[10.5px] font-semibold uppercase tracking-wide text-brand-inkMuted">
+                  {PAYMENT_METHOD_LABELS[t.method as PaymentMethod] ?? t.method}
+                </div>
+                <div className="text-sm font-bold text-brand-ink">{currencyFmt.format(t.total)}</div>
+                <div className="text-[11px] text-brand-inkMuted">
+                  {t.count} sale{t.count === 1 ? "" : "s"}
+                </div>
               </div>
-              <div className="text-sm font-bold text-brand-ink">{currencyFmt.format(t.total)}</div>
-              <div className="text-[11px] text-brand-inkMuted">
-                {t.count} sale{t.count === 1 ? "" : "s"}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 
