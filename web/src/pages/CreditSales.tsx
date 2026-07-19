@@ -1,16 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
 import { api, ApiError } from "../lib/api";
+import { getCached } from "../lib/cachedFetch";
+import { isLocalCustomerId, localDb, type CachedCustomer } from "../db/localDb";
+import { SALES_SYNCED_EVENT } from "../lib/sync";
+import { overlayCreditSales } from "../lib/offlineStats";
+import type { CreditCustomer } from "../types/reports";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
-
-interface CreditCustomer {
-  id: string;
-  name: string;
-  phone: string | null;
-  creditLimit: string | number;
-  creditBalance: string | number;
-  oldestDueDate: string | null;
-}
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
 
@@ -20,16 +17,61 @@ function isOverdue(dueDate: string | null) {
 
 export function CreditSales() {
   const [customers, setCustomers] = useState<CreditCustomer[]>([]);
+  const [stale, setStale] = useState(false);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
 
+  // Sales rung up on this device the server doesn't know about yet — every
+  // sale, even while online, is queued locally and synced in the background
+  // (see queueSale/flushPendingSales in lib/sync.ts), so the list below can
+  // otherwise lag a freshly completed credit sale until that background sync
+  // happens to land. Reactively re-queried the instant a sale is queued or
+  // its sync status changes.
+  const unsyncedSales = useLiveQuery(
+    () => localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+  // Only needed to fill in name/phone/creditLimit for a customer created
+  // inline during a credit sale that hasn't synced yet — see overlayCreditSales.
+  const customerCache = useLiveQuery(
+    async () => new Map((await localDb.customers.toArray()).map((c) => [c.id, c])),
+    [],
+    new Map<string, CachedCustomer>()
+  );
+
+  const displayCustomers = useMemo(
+    () => overlayCreditSales(customers, unsyncedSales, customerCache),
+    [customers, unsyncedSales, customerCache]
+  );
+  const creditSaleCount = unsyncedSales.filter((s) => s.paymentMethod === "CREDIT").length;
+
   async function load() {
-    setCustomers(await api.get<CreditCustomer[]>("/api/customers/credit"));
+    try {
+      const res = await getCached<CreditCustomer[]>("/api/customers/credit");
+      setCustomers(res.data);
+      setStale(res.stale);
+      setCachedAt(res.cachedAt);
+      setLoadError(false);
+    } catch {
+      setLoadError(true);
+    }
   }
 
   useEffect(() => {
     void load();
+    // Re-fetch the moment connectivity returns, and once a sync batch
+    // actually confirms — see the matching comment in Dashboard.tsx for why
+    // "online" alone isn't enough to trust a fresh fetch.
+    window.addEventListener("online", load);
+    window.addEventListener(SALES_SYNCED_EVENT, load);
+    return () => {
+      window.removeEventListener("online", load);
+      window.removeEventListener(SALES_SYNCED_EVENT, load);
+    };
   }, []);
 
   async function recordPayment(customerId: string) {
@@ -44,12 +86,32 @@ export function CreditSales() {
     }
   }
 
-  const totalOutstanding = customers.reduce((sum, c) => sum + Number(c.creditBalance), 0);
+  const totalOutstanding = displayCustomers.reduce((sum, c) => sum + Number(c.creditBalance), 0);
 
   return (
     <>
-      <Topbar title="Credit Sales" subtitle={`${currencyFmt.format(totalOutstanding)} outstanding across ${customers.length} customers`} />
+      <Topbar
+        title="Credit Sales"
+        subtitle={`${currencyFmt.format(totalOutstanding)} outstanding across ${displayCustomers.length} customers`}
+      />
       <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 sm:p-6 lg:p-8">
+        {loadError && (
+          <div className="text-sm font-medium text-brand-warn">
+            Couldn't load credit sales — you're offline and no cached data is available on this device yet.
+          </div>
+        )}
+        {!loadError && stale && (
+          <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+            Offline — showing figures from {cachedAt ? new Date(cachedAt).toLocaleString("en-KE") : "the last time this device was online"}.
+            Will update automatically once you're back online.
+          </div>
+        )}
+        {!loadError && creditSaleCount > 0 && (
+          <div className="rounded-lg bg-brand-accent/10 px-3 py-2 text-sm font-medium text-brand-accentText">
+            Includes {creditSaleCount} credit sale{creditSaleCount === 1 ? "" : "s"} made on this device that{" "}
+            {creditSaleCount === 1 ? "hasn't" : "haven't"} synced yet — balances are estimates until they do.
+          </div>
+        )}
         {error && <div className="text-sm font-medium text-brand-warn">{error}</div>}
         <Card>
           <div className="overflow-x-auto">
@@ -61,7 +123,7 @@ export function CreditSales() {
                 <span>DUE DATE</span>
                 <span>ACTION</span>
               </div>
-              {customers.map((c) => {
+              {displayCustomers.map((c) => {
                 const overdue = isOverdue(c.oldestDueDate);
                 return (
                   <div key={c.id} className="grid grid-cols-5 items-center border-b border-brand-border/60 py-2.5 text-sm">
@@ -72,7 +134,13 @@ export function CreditSales() {
                       {c.oldestDueDate ? new Date(c.oldestDueDate).toLocaleDateString("en-KE") : "—"}
                       {overdue && " (overdue)"}
                     </span>
-                    {payingId === c.id ? (
+                    {isLocalCustomerId(c.id) ? (
+                      // This customer was created inline during a credit sale
+                      // on some device and hasn't synced yet — the server
+                      // doesn't know this id, so there's nothing to record a
+                      // payment against until it does.
+                      <span className="text-xs text-brand-inkMuted">Syncing…</span>
+                    ) : payingId === c.id ? (
                       <div className="flex gap-2">
                         <input
                           autoFocus
@@ -95,7 +163,9 @@ export function CreditSales() {
                   </div>
                 );
               })}
-              {customers.length === 0 && <div className="py-6 text-sm text-brand-inkMuted">No outstanding credit balances.</div>}
+              {displayCustomers.length === 0 && !loadError && (
+                <div className="py-6 text-sm text-brand-inkMuted">No outstanding credit balances.</div>
+              )}
             </div>
           </div>
         </Card>

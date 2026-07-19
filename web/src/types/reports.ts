@@ -125,3 +125,14 @@ export interface AnalyticsReport {
   topProducts: { name: string; revenue: number }[];
   topExpenseCategories: { category: string; amount: number }[];
 }
+
+// A customer with an outstanding balance, from GET /api/customers/credit —
+// the Credit Sales page's list.
+export interface CreditCustomer {
+  id: string;
+  name: string;
+  phone: string | null;
+  creditLimit: string | number;
+  creditBalance: string | number;
+  oldestDueDate: string | null;
+}

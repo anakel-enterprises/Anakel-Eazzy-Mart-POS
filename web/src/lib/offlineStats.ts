@@ -1,6 +1,7 @@
-import type { PendingSale } from "../db/localDb";
+import type { CachedCustomer, PendingSale } from "../db/localDb";
 import type {
   AnalyticsReport,
+  CreditCustomer,
   CustomersReport,
   DashboardData,
   EmployeeRow,
@@ -433,4 +434,51 @@ export function overlayEmployeePerformance(
     rows.push({ cashierId: currentUser.id, name: currentUser.name, totalSales: totalDelta, transactionCount: sales.length });
   }
   return rows.sort((a, b) => b.totalSales - a.totalSales);
+}
+
+// The Credit Sales page's list is nothing but `Customer.creditBalance`
+// server-side (see GET /api/customers/credit), and every sale — even while
+// online — is written locally and synced in the background (see
+// queueSale/flushPendingSales), not awaited before Checkout considers the
+// sale "done". A credit sale showing up in the receipt/"sale complete"
+// screen the instant it's rung up therefore doesn't mean the server has
+// actually applied it to the customer's balance yet. Without this overlay,
+// the Credit Sales page has no way to reflect a sale until its own
+// independent background sync happens to land first.
+export function overlayCreditSales(
+  data: CreditCustomer[],
+  sales: PendingSale[],
+  customerCache: Map<string, CachedCustomer>
+): CreditCustomer[] {
+  const creditSales = sales.filter((s) => s.paymentMethod === "CREDIT" && s.customerId);
+  if (creditSales.length === 0) return data;
+
+  const map = new Map(data.map((c) => [c.id, { ...c, creditBalance: num(c.creditBalance) }]));
+
+  for (const sale of creditSales) {
+    const total = estimateSaleTotal(sale);
+    const customerId = sale.customerId!;
+    const existing = map.get(customerId);
+    if (existing) {
+      existing.creditBalance = num(existing.creditBalance) + total;
+      continue;
+    }
+    // Not in the server snapshot at all yet — either this customer's very
+    // first outstanding balance, or (if created inline during this same
+    // credit sale) a brand-new customer the server hasn't even heard of.
+    const cached = customerCache.get(customerId);
+    map.set(customerId, {
+      id: customerId,
+      name: sale.customerName ?? cached?.name ?? "Unknown",
+      phone: cached?.phone ?? null,
+      creditLimit: cached?.creditLimit ?? 0,
+      creditBalance: total,
+      // Matches the server's own default grace period (DEFAULT_CREDIT_DAYS
+      // in sales.ts) — an estimate only; whatever the server stores once
+      // this sale actually syncs is authoritative.
+      oldestDueDate: new Date(new Date(sale.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+  }
+
+  return Array.from(map.values()).sort((a, b) => num(b.creditBalance) - num(a.creditBalance));
 }
