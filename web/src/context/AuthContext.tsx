@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
-import { refreshProductCache } from "../lib/sync";
+import { refreshProductCache, refreshCustomerCache } from "../lib/sync";
 import { cacheOfflineCredential, tryOfflineLogin } from "../lib/offlineAuth";
 import { clearActivity, isSessionTimedOut, recordActivity } from "../lib/sessionTimeout";
 import type { AuthUser } from "../types/auth";
@@ -128,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSessionExpired(false);
       setSessionTimedOut(false);
       void refreshProductCache();
+      void refreshCustomerCache();
       // Refreshes this device's offline-login cache with the password just
       // typed (never stored in plaintext — see lib/offlineAuth.ts) and the
       // fresh token, so the very next login attempt can succeed offline too,

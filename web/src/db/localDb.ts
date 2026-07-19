@@ -14,6 +14,19 @@ export interface CachedProduct {
   lowStockThreshold: number;
 }
 
+// Mirrors the customer fields Checkout actually needs to search, display,
+// and (server-side, once synced) price a credit sale by tier — cached the
+// same way products are, so credit sales work with zero connectivity.
+export interface CachedCustomer {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  type: "RETAIL" | "WHOLESALE" | "VIP";
+  creditLimit: number;
+  creditBalance: number;
+}
+
 export interface PendingSaleItem {
   productId: string;
   name: string;
@@ -125,6 +138,24 @@ export interface PendingProduct {
   syncError?: string;
 }
 
+// A customer created offline — during a credit sale's inline "add customer"
+// at Checkout, most commonly. Same shape as PendingProduct: `clientId`
+// doubles as the customer's `id` in the `customers` cache until it syncs
+// (see newLocalCustomerId/isLocalCustomerId), so it's immediately
+// selectable for the credit sale being rung up right now, with no separate
+// "unsynced customers" overlay to merge in.
+export interface PendingCustomer {
+  clientId: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  type: "RETAIL" | "WHOLESALE" | "VIP";
+  creditLimit: number;
+  createdAt: string;
+  syncStatus: SyncStatus;
+  syncError?: string;
+}
+
 // An edit to a product that already has a real server id, queued for PUT
 // /api/products/:id. Keyed by productId (not a generated clientId) so a
 // second edit made before the first has synced simply overwrites this row —
@@ -187,6 +218,8 @@ class LocalDb extends Dexie {
   pendingProductEdits!: Table<PendingProductEdit, string>;
   pendingStockAdjustments!: Table<PendingStockAdjustment, string>;
   pendingProductDeletes!: Table<PendingProductDelete, string>;
+  customers!: Table<CachedCustomer, string>;
+  pendingCustomers!: Table<PendingCustomer, string>;
 
   constructor() {
     super("anakel-pos");
@@ -233,6 +266,19 @@ class LocalDb extends Dexie {
       pendingStockAdjustments: "clientId, productId, syncStatus, createdAt",
       pendingProductDeletes: "productId, syncStatus, createdAt",
     });
+    this.version(7).stores({
+      products: "id, name, sku, barcode",
+      pendingSales: "clientId, syncStatus, createdAt",
+      heldSales: "id, createdAt",
+      apiCache: "url",
+      offlineCredentials: "email",
+      pendingProducts: "clientId, syncStatus, createdAt",
+      pendingProductEdits: "productId, syncStatus, updatedAt",
+      pendingStockAdjustments: "clientId, productId, syncStatus, createdAt",
+      pendingProductDeletes: "productId, syncStatus, createdAt",
+      customers: "id, name, phone",
+      pendingCustomers: "clientId, syncStatus, createdAt",
+    });
   }
 }
 
@@ -255,4 +301,16 @@ export function newLocalProductId(): string {
 
 export function isLocalProductId(id: string): boolean {
   return id.startsWith(LOCAL_PRODUCT_ID_PREFIX);
+}
+
+// Same local-id-until-synced scheme as products, for a customer created
+// offline (see remapLocalCustomerId in lib/sync.ts).
+const LOCAL_CUSTOMER_ID_PREFIX = "localcust_";
+
+export function newLocalCustomerId(): string {
+  return `${LOCAL_CUSTOMER_ID_PREFIX}${newClientId()}`;
+}
+
+export function isLocalCustomerId(id: string): boolean {
+  return id.startsWith(LOCAL_CUSTOMER_ID_PREFIX);
 }

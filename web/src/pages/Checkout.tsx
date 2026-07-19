@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb, newClientId, type CachedProduct, type SplitPaymentEntry } from "../db/localDb";
-import { queueSale, refreshProductCache, undoLastSale } from "../lib/sync";
+import { queueSale, queueCustomerCreate, refreshProductCache, refreshCustomerCache, undoLastSale } from "../lib/sync";
 import { api, ApiError, isApiReachable } from "../lib/api";
 import { getCached } from "../lib/cachedFetch";
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS } from "../lib/paymentMethods";
@@ -73,7 +73,6 @@ export function Checkout() {
   const [showScanner, setShowScanner] = useState(false);
   const [couponCode, setCouponCode] = useState("");
   const [customerQuery, setCustomerQuery] = useState("");
-  const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState("");
@@ -92,6 +91,7 @@ export function Checkout() {
     void isApiReachable().then((reachable) => {
       if (reachable) {
         void refreshProductCache();
+        void refreshCustomerCache();
       }
     });
     // Store name/address/phone for the printable receipt header — cached
@@ -100,19 +100,17 @@ export function Checkout() {
     void getCached<ReceiptStore>("/api/settings").then((res) => setStoreInfo(res.data)).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (paymentMethod !== "CREDIT" || !customerQuery.trim()) {
-      setCustomerOptions([]);
-      return;
-    }
-    const handle = setTimeout(() => {
-      void api
-        .get<CustomerOption[]>(`/api/customers?q=${encodeURIComponent(customerQuery)}`)
-        .then(setCustomerOptions)
-        .catch(() => setCustomerOptions([]));
-    }, 250);
-    return () => clearTimeout(handle);
-  }, [customerQuery, paymentMethod]);
+  // Searches this device's cached customer list instead of hitting the
+  // network — same reason product search does the same (see `results`
+  // below): a credit sale needs to work with zero connectivity, and the
+  // cache is refreshed on load/online/periodically (see lib/sync.ts) so it
+  // rarely lags behind by more than a few minutes.
+  const customerOptions = useLiveQuery(async () => {
+    if (paymentMethod !== "CREDIT" || !customerQuery.trim()) return [];
+    const q = customerQuery.trim().toLowerCase();
+    const all = await localDb.customers.toArray();
+    return all.filter((c) => c.name.toLowerCase().includes(q) || c.phone?.toLowerCase().includes(q)).slice(0, 8);
+  }, [customerQuery, paymentMethod], []);
 
   const results = useLiveQuery(async () => {
     if (!query.trim()) return [];
@@ -165,7 +163,6 @@ export function Checkout() {
     setCouponCode("");
     setCustomer(null);
     setCustomerQuery("");
-    setCustomerOptions([]);
     setShowNewCustomerForm(false);
     setNewCustomerName("");
     setNewCustomerPhone("");
@@ -362,31 +359,32 @@ export function Checkout() {
     setNewCustomerPhone("");
     setNewCustomerError(null);
     setShowNewCustomerForm(true);
-    setCustomerOptions([]);
   }
 
   // Credit sales previously required the customer to already exist in the
   // system — a cashier meeting a first-time credit customer had to leave
   // Checkout, go create them in Customers, then come back. This creates them
-  // inline and selects them for the current sale in one step. Requires
-  // MANAGE_CUSTOMERS (cashiers have it by default) and a connection, same as
-  // the customer search above it.
+  // inline and selects them for the current sale in one step — and, like
+  // every other Checkout write, goes through the offline queue first: the
+  // customer is created locally under a local-only id and immediately
+  // usable for this sale, syncing (and getting its real server id) once a
+  // connection is available. Requires MANAGE_CUSTOMERS (cashiers have it by
+  // default), same as the customer search above it, but no connection.
   async function createCustomerInline() {
     if (!newCustomerName.trim()) return;
     setCreatingCustomer(true);
     setNewCustomerError(null);
     try {
-      const created = await api.post<CustomerOption>("/api/customers", {
-        name: newCustomerName.trim(),
-        phone: newCustomerPhone.trim() || undefined,
-      });
-      setCustomer({ id: created.id, name: created.name, phone: created.phone });
+      const name = newCustomerName.trim();
+      const phone = newCustomerPhone.trim() || undefined;
+      const id = await queueCustomerCreate({ name, phone });
+      setCustomer({ id, name, phone: phone ?? null });
       setShowNewCustomerForm(false);
       setCustomerQuery("");
       setNewCustomerName("");
       setNewCustomerPhone("");
-    } catch (err) {
-      setNewCustomerError(err instanceof ApiError ? err.message : "Couldn't add customer");
+    } catch {
+      setNewCustomerError("Couldn't add customer");
     } finally {
       setCreatingCustomer(false);
     }
@@ -686,10 +684,7 @@ export function Checkout() {
                       {customerOptions.map((c) => (
                         <button
                           key={c.id}
-                          onClick={() => {
-                            setCustomer(c);
-                            setCustomerOptions([]);
-                          }}
+                          onClick={() => setCustomer(c)}
                           className="block w-full px-3 py-2 text-left text-sm hover:bg-brand-bg"
                         >
                           {c.name} {c.phone && <span className="text-brand-inkMuted">· {c.phone}</span>}
@@ -707,7 +702,9 @@ export function Checkout() {
                   )}
                 </div>
               )}
-              <p className="mt-1 text-xs text-brand-inkMuted">Customer lookup and adding a new customer require a connection.</p>
+              <p className="mt-1 text-xs text-brand-inkMuted">
+                Works offline too — a new customer syncs (and any credit limit is checked) once you're back online.
+              </p>
             </div>
           )}
 

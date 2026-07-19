@@ -295,6 +295,8 @@ keeps working with no connectivity.
 | `pendingProductEdits` | Added in schema v5. The offline product-edit queue for products that already have a real server id — keyed by `productId`, so a second edit before the first syncs just overwrites the row (latest wins). |
 | `pendingStockAdjustments` | Added in schema v5. The offline stock-adjustment queue for products that already have a real server id — one row per adjustment (not coalesced), mirroring the server's `StockAdjustment` audit trail. |
 | `pendingProductDeletes` | Added in schema v6. The offline product-delete queue for products that already have a real server id, keyed by `productId`. |
+| `customers` | Added in schema v7. A local, writable mirror of the server's customer list — used for offline search/selection at Checkout during a `CREDIT` sale. Same upsert-but-don't-wipe-local-only-rows behavior as `products` (`refreshCustomerCache()` / `isLocalCustomerId`). See [Offline customers and credit sales](#offline-customers-and-credit-sales). |
+| `pendingCustomers` | Added in schema v7. The offline customer-create queue, one row per `queueCustomerCreate()` call (Checkout's inline "add customer"), keyed by a local-only `clientId` that also doubles as the customer's `id` in `customers` until it syncs. |
 
 ### Sync engine (`web/src/lib/sync.ts`)
 
@@ -357,9 +359,11 @@ sequenceDiagram
   (see [API.md](./API.md#post-apisales)).
 - Dashboard and Reports show cached figures offline, live-adjusted for sales rung up on this device that
   haven't synced yet (see below). Inventory (adding, editing, and stock-adjusting products) also works
-  fully offline — see [Offline product management](#offline-product-management) — but everything else
-  (employee management, supplier ledgers, expenses/income, promotions, settings, etc.) has no offline
-  support: those pages call the API directly and simply fail if unreachable.
+  fully offline — see [Offline product management](#offline-product-management) — as does a `CREDIT` sale,
+  including searching for and creating the customer it's billed to — see
+  [Offline customers and credit sales](#offline-customers-and-credit-sales). Everything else (employee
+  management, supplier ledgers, expenses/income, promotions, settings, etc.) has no offline support: those
+  pages call the API directly and simply fail if unreachable.
 
 ### Offline product management
 
@@ -414,6 +418,37 @@ that product's create has, and get rejected as an unknown product. All five flus
 running returns *that* run's result instead of a stale no-op, so the background timer, the `online`
 listener, and a direct call from `queueSale`/`queueProductCreate` firing within milliseconds of each
 other never silently skip work.
+
+### Offline customers and credit sales
+
+A `CREDIT` sale needs a customer, and until this feature both looking one up and creating a new one were
+plain network calls — a credit sale simply couldn't be rung up offline at all. Customers now follow the
+exact same "local mirror + offline-create queue" shape as products:
+
+- **`refreshCustomerCache()`** mirrors `refreshProductCache()`: pulls `GET /api/customers` into the
+  `customers` Dexie table (schema v7), called on login, on load, whenever a customer create/sale syncs,
+  and periodically alongside the product cache in `startBackgroundSync()`. Checkout's customer search
+  (`paymentMethod === "CREDIT"`) reads this table via `useLiveQuery` instead of hitting the network per
+  keystroke — the same reasoning as product search.
+- **`queueCustomerCreate()`** mirrors `queueProductCreate()`: writes a `pendingCustomers` row and an
+  optimistic `customers` row under a local-only id (`localcust_<clientId>`, see
+  `isLocalCustomerId`/`newLocalCustomerId`), so a customer added inline at Checkout (the "+ Add … as a new
+  customer" flow) is immediately selectable for the sale being rung up right now, online or off.
+  `POST /api/customers` accepts an optional `clientId` (added in the same migration as the `Customer`
+  model's `clientId` column) for the same retry-safety idempotency as `Sale`/`Product`.
+- **`remapLocalCustomerId()`** mirrors `remapLocalProductId()`: once the create actually syncs, rewrites
+  the cached `customers` row and the `customerId` on any not-yet-synced `pendingSales` row that already
+  billed this customer, over to the real server id.
+- **Flush ordering**: `flushPendingSales()` now awaits both `flushPendingProducts()` *and*
+  `flushPendingCustomers()` before reading its own queue, for the identical reason as products — a credit
+  sale referencing a brand-new local customer would otherwise risk syncing before that customer's create
+  has landed, and get rejected as an unknown customer.
+- **What's still only an estimate**: a customer's `creditLimit` isn't enforced client-side — the server's
+  own check (`POST /api/sales`, see [API.md](./API.md#post-apisales)) runs once the sale actually syncs,
+  same as every other server-side-only validation (promotions, coupons, tiered pricing) this app already
+  defers until sync. A cashier can therefore ring up a credit sale offline that turns out to exceed the
+  customer's limit once it reaches the server; the sale still lands as `error`/`syncStatus` (visible via
+  the `Topbar`'s "N sale(s) failed to sync" pill), not silently.
 
 **Gap**: Reports' Inventory tab and the P&L/Analytics COGS estimates are driven by the server's own
 report endpoints, cached via `getCached()` — they reflect a product added or edited on this device only

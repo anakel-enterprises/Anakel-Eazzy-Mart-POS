@@ -393,6 +393,7 @@ the UI can flag overdue accounts.
 
 | Field | Type | Required |
 |---|---|---|
+| `clientId` | string, min 1 | no (POST only) — idempotency key, see below |
 | `name` | string, min 1 | yes (POST) |
 | `phone` | string | no |
 | `email` | valid email or empty string | no |
@@ -400,6 +401,11 @@ the UI can flag overdue accounts.
 | `creditLimit` | number, ≥ 0 | no, default `0` (see the "0 = unlimited" note under Sales above) |
 
 PUT accepts a partial body. `404` on unknown id.
+
+**Idempotency**: this is the endpoint the offline customer-create queue (Checkout's inline "add customer"
+during a credit sale — see [ARCHITECTURE.md](./ARCHITECTURE.md#offline-customers-and-credit-sales))
+retries. If a `Customer` with the given `clientId` already exists, the request is **not** re-processed —
+the existing customer is returned as-is with `200`, same idempotency pattern as `POST /api/sales`.
 
 ### POST `/api/customers/:id/payments`
 

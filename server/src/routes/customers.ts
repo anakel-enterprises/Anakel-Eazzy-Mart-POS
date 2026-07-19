@@ -50,6 +50,10 @@ customersRouter.get(
 );
 
 const customerSchema = z.object({
+  // Lets a customer created offline (see Checkout's inline "add customer"
+  // during a credit sale) retry a dropped-response POST without risking a
+  // duplicate — same idempotency pattern as Sale/Product/StockAdjustment.
+  clientId: z.string().min(1).optional(),
   name: z.string().min(1),
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal("")),
@@ -62,6 +66,15 @@ customersRouter.post(
   requirePermission("MANAGE_CUSTOMERS"),
   asyncHandler(async (req, res) => {
     const data = customerSchema.parse(req.body);
+
+    if (data.clientId) {
+      const existing = await prisma.customer.findUnique({ where: { clientId: data.clientId } });
+      if (existing) {
+        res.status(200).json(existing);
+        return;
+      }
+    }
+
     const customer = await prisma.customer.create({
       data: { ...data, storeId: req.auth!.storeId },
     });

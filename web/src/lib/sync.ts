@@ -2,11 +2,15 @@ import { api, ApiError, getAuthToken, isApiReachable } from "./api";
 import {
   localDb,
   isLocalProductId,
+  isLocalCustomerId,
   newClientId,
   newLocalProductId,
+  newLocalCustomerId,
   type CachedProduct,
+  type CachedCustomer,
   type PendingSale,
   type PendingProduct,
+  type PendingCustomer,
   type PendingStockAdjustment,
 } from "../db/localDb";
 
@@ -62,6 +66,42 @@ export async function refreshProductCache(): Promise<void> {
   });
 }
 
+interface ServerCustomer {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  type: "RETAIL" | "WHOLESALE" | "VIP";
+  creditLimit: string | number;
+  creditBalance: string | number;
+}
+
+// Pulls the customer list down so a credit sale can search/select/create a
+// customer with no connection — same purpose and shape as
+// refreshProductCache. Doesn't `clear()` first for the same reason: a
+// customer created on this device while offline lives here under a
+// local-only id (see isLocalCustomerId) until its own sync completes.
+export async function refreshCustomerCache(): Promise<void> {
+  const customers = await api.get<ServerCustomer[]>("/api/customers");
+  const cached: CachedCustomer[] = customers.map((c) => ({
+    id: c.id,
+    name: c.name,
+    phone: c.phone,
+    email: c.email,
+    type: c.type,
+    creditLimit: Number(c.creditLimit),
+    creditBalance: Number(c.creditBalance),
+  }));
+  const serverIds = new Set(cached.map((c) => c.id));
+
+  await localDb.transaction("rw", localDb.customers, async () => {
+    const existingIds = (await localDb.customers.toCollection().primaryKeys()) as string[];
+    const staleIds = existingIds.filter((id) => !serverIds.has(id) && !isLocalCustomerId(id));
+    if (staleIds.length > 0) await localDb.customers.bulkDelete(staleIds);
+    await localDb.customers.bulkPut(cached);
+  });
+}
+
 export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncError" | "authToken">): Promise<void> {
   await localDb.pendingSales.put({ ...sale, authToken: getAuthToken() ?? undefined, syncStatus: "pending" });
   void flushPendingSales();
@@ -105,11 +145,13 @@ async function doFlushPendingSales(): Promise<{ synced: number; failed: number }
 
   if (!(await isApiReachable())) return { synced: 0, failed: 0 };
 
-  // A sale can reference a product that was itself created on this device
-  // and hasn't synced yet (its id is still local-only) — make sure any such
-  // create (and the id remap that follows it) has landed before attempting
-  // to POST the sale, or the server will reject it as an unknown product.
+  // A sale can reference a product or customer that was itself created on
+  // this device and hasn't synced yet (its id is still local-only) — make
+  // sure any such create (and the id remap that follows it) has landed
+  // before attempting to POST the sale, or the server will reject it as an
+  // unknown product/customer.
   await flushPendingProducts();
+  await flushPendingCustomers();
 
   const pending = await localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray();
   for (const sale of pending) {
@@ -581,6 +623,114 @@ async function doFlushPendingProductDeletes(): Promise<{ synced: number; failed:
   return { synced, failed };
 }
 
+export interface NewCustomerInput {
+  name: string;
+  phone?: string;
+  email?: string;
+  type?: "RETAIL" | "WHOLESALE" | "VIP";
+  creditLimit?: number;
+}
+
+// Adding a customer always goes through this queue, online or offline —
+// same "write locally first, sync after" shape as queueProductCreate. The
+// new customer is immediately selectable for the credit sale being rung up
+// right now under a local-only id (see newLocalCustomerId); once its create
+// actually reaches the server, remapLocalCustomerId swaps every reference
+// to it — the cached row itself, plus any not-yet-synced sale against it —
+// over to the real server id.
+export async function queueCustomerCreate(input: NewCustomerInput): Promise<string> {
+  const clientId = newLocalCustomerId();
+  const createdAt = new Date().toISOString();
+  const type = input.type ?? "RETAIL";
+  const creditLimit = input.creditLimit ?? 0;
+
+  await localDb.transaction("rw", localDb.pendingCustomers, localDb.customers, async () => {
+    await localDb.pendingCustomers.put({
+      clientId,
+      name: input.name,
+      phone: input.phone,
+      email: input.email,
+      type,
+      creditLimit,
+      createdAt,
+      syncStatus: "pending",
+    });
+    await localDb.customers.put({
+      id: clientId,
+      name: input.name,
+      phone: input.phone ?? null,
+      email: input.email ?? null,
+      type,
+      creditLimit,
+      creditBalance: 0,
+    });
+  });
+
+  void flushPendingCustomers();
+  return clientId;
+}
+
+// Rewrites every local reference to a just-synced customer from its
+// temporary local id to the real id the server assigned — same pattern as
+// remapLocalProductId.
+async function remapLocalCustomerId(oldId: string, newId: string): Promise<void> {
+  await localDb.transaction("rw", localDb.customers, localDb.pendingSales, async () => {
+    const row = await localDb.customers.get(oldId);
+    if (row) {
+      await localDb.customers.put({ ...row, id: newId });
+      await localDb.customers.delete(oldId);
+    }
+
+    const affectedSales = await localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray();
+    for (const sale of affectedSales) {
+      if (sale.customerId !== oldId) continue;
+      await localDb.pendingSales.update(sale.clientId, { customerId: newId });
+    }
+  });
+}
+
+let customersFlushInFlight: Promise<{ synced: number; failed: number }> | null = null;
+
+export function flushPendingCustomers(): Promise<{ synced: number; failed: number }> {
+  if (customersFlushInFlight) return customersFlushInFlight;
+  customersFlushInFlight = doFlushPendingCustomers().finally(() => {
+    customersFlushInFlight = null;
+  });
+  return customersFlushInFlight;
+}
+
+async function doFlushPendingCustomers(): Promise<{ synced: number; failed: number }> {
+  let synced = 0;
+  let failed = 0;
+
+  if (!(await isApiReachable())) return { synced: 0, failed: 0 };
+
+  const pending = await localDb.pendingCustomers.where("syncStatus").anyOf("pending", "error").toArray();
+  for (const c of pending) {
+    try {
+      const created = await api.post<{ id: string }>("/api/customers", {
+        clientId: c.clientId,
+        name: c.name,
+        phone: c.phone,
+        email: c.email,
+        type: c.type,
+        creditLimit: c.creditLimit,
+      });
+      await remapLocalCustomerId(c.clientId, created.id);
+      await localDb.pendingCustomers.update(c.clientId, { syncStatus: "synced" });
+      synced++;
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Network error";
+      await localDb.pendingCustomers.update(c.clientId, { syncStatus: "error", syncError: message });
+      failed++;
+    }
+  }
+
+  if (synced > 0) void refreshCustomerCache();
+
+  return { synced, failed };
+}
+
 const RETRY_INTERVAL_MS = 25_000;
 const CACHE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
@@ -596,6 +746,7 @@ export function startBackgroundSync(): () => void {
     void flushPendingProductEdits();
     void flushPendingStockAdjustments();
     void flushPendingProductDeletes();
+    void flushPendingCustomers();
   };
   window.addEventListener("online", onlineHandler);
 
@@ -606,12 +757,14 @@ export function startBackgroundSync(): () => void {
     void flushPendingProductEdits();
     void flushPendingStockAdjustments();
     void flushPendingProductDeletes();
+    void flushPendingCustomers();
     const now = Date.now();
     if (now - lastCacheRefresh > CACHE_REFRESH_INTERVAL_MS) {
       lastCacheRefresh = now;
       void isApiReachable().then((reachable) => {
         if (reachable) {
           void refreshProductCache();
+          void refreshCustomerCache();
         }
       });
     }

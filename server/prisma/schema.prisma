@@ -345,6 +345,9 @@ model Customer {
   creditBalance Decimal      @default(0) @db.Decimal(12, 2)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+  // Idempotency key for a customer created offline and retried on sync —
+  // same purpose as Product/StockAdjustment's clientId.
+  clientId      String?      @unique
 
   sales          Sale[]
   creditPayments CreditPayment[]
