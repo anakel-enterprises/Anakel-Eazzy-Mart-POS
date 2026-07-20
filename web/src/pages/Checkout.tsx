@@ -124,9 +124,15 @@ export function Checkout() {
     if (!query.trim()) return [];
     const q = query.trim().toLowerCase();
     const all = await localDb.products.toArray();
+    // Capped generously rather than left unbounded — a search matching
+    // hundreds of products would be slow to render for no real benefit —
+    // but high enough that every realistic set of product variations (e.g.
+    // every size/flavor of "Soda") fits, with the results list below made
+    // scrollable so all of them are actually reachable, not just the first
+    // handful.
     return all
       .filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.barcode?.includes(q))
-      .slice(0, 8);
+      .slice(0, 50);
   }, [query]);
 
   const heldSales = useLiveQuery(() => localDb.heldSales.orderBy("createdAt").reverse().toArray(), [], []);
@@ -451,7 +457,7 @@ export function Checkout() {
             </Button>
           </div>
           {results && results.length > 0 && (
-            <Card className="flex flex-col gap-1 p-2">
+            <Card className="flex max-h-80 flex-col gap-1 overflow-y-auto p-2">
               {results.map((p) => (
                 <button
                   key={p.id}
