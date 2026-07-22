@@ -75,6 +75,11 @@ export interface PendingSale {
   // for this amount already succeeded before the sale is allowed to
   // complete. Not used for MPESA_MANUAL, which is cashier-asserted.
   mpesaCheckoutRequestId?: string;
+  // True only when `createdAt` was deliberately set to an earlier date via
+  // Checkout's backdate control (requires BACKDATE_SALES — see server's
+  // POST /api/sales) — never set for the ordinary offline-sync case where
+  // createdAt legitimately predates now just because the device was offline.
+  backdated?: boolean;
 }
 
 // Held sales never touch the server — a "hold" is a local pause-and-resume on

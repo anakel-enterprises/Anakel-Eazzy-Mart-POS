@@ -8,6 +8,7 @@ export const PERMISSION_KEYS = [
   "MANAGE_SUPPLIERS",
   "MANAGE_EXPENSES",
   "MANAGE_PROMOTIONS",
+  "BACKDATE_SALES",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -17,6 +18,7 @@ export const PERMISSION_CATALOG: { category: string; key: PermissionKey; label: 
   { category: "Sales", key: "MAKE_SALES", label: "Can make sales & manage the cash register" },
   { category: "Sales", key: "MANAGE_CUSTOMERS", label: "Can view & manage customers / credit sales" },
   { category: "Sales", key: "VIEW_REPORTS", label: "Can view reports & sales totals" },
+  { category: "Sales", key: "BACKDATE_SALES", label: "Can backdate a sale to an earlier date/time at checkout" },
   { category: "Stock", key: "MANAGE_PRODUCTS", label: "Can add/edit products, categories & stock" },
   { category: "Stock", key: "MANAGE_SUPPLIERS", label: "Can manage suppliers & purchases" },
   { category: "Finance", key: "MANAGE_EXPENSES", label: "Can approve expenses & record income" },
@@ -31,6 +33,7 @@ const allTrue: PermissionMap = {
   MANAGE_SUPPLIERS: true,
   MANAGE_EXPENSES: true,
   MANAGE_PROMOTIONS: true,
+  BACKDATE_SALES: true,
 };
 
 const allFalse: PermissionMap = {
@@ -41,6 +44,7 @@ const allFalse: PermissionMap = {
   MANAGE_SUPPLIERS: false,
   MANAGE_EXPENSES: false,
   MANAGE_PROMOTIONS: false,
+  BACKDATE_SALES: false,
 };
 
 // Defaults applied when an employee's `permissions` column is null, i.e.

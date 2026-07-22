@@ -81,6 +81,12 @@ export interface SaleHistoryItem {
 export interface SaleHistoryRow {
   id: string;
   createdAt: string;
+  // Always the real moment this sale was actually entered into the system —
+  // for an ordinary sale this sits close to createdAt, but for a
+  // deliberately backdated one (isBackdated) it's today, while createdAt is
+  // whatever earlier date was chosen.
+  enteredAt: string;
+  isBackdated: boolean;
   total: string | number;
   paymentMethod: string;
   status: string;

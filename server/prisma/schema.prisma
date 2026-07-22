@@ -226,9 +226,26 @@ model Sale {
   // receipts/reports can show it without an extra join.
   mpesaReceiptNumber String?
 
+  // The sale's effective/business date — what every report, receipt, and
+  // day-bucketing calculation treats as "when this sale happened". Normally
+  // this is genuinely when the sale was rung up (including a delayed value
+  // for an offline sale synced later), but a BACKDATE_SALES-permitted user
+  // can deliberately set this to an earlier date via Checkout's backdate
+  // control — see isBackdated/enteredAt below for how that stays auditable.
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  syncedAt  DateTime @default(now())
+  // Always the actual moment this row was created server-side — never
+  // client-supplied, so it can't be backdated itself. For an ordinary sale
+  // this sits within moments of createdAt (or up to however long it sat
+  // queued offline); for a deliberately backdated sale (isBackdated=true) it
+  // shows the real date/time someone made the entry, distinct from the
+  // earlier date they chose for createdAt.
+  enteredAt DateTime @default(now())
+  // True only when createdAt was deliberately overridden via Checkout's
+  // backdate control (POST /api/sales requires BACKDATE_SALES for this) —
+  // not set for the ordinary offline-sync case where createdAt legitimately
+  // predates enteredAt just because the device was offline for a while.
+  isBackdated Boolean @default(false)
 
   items            SaleItem[]
   splitPayments    SalePayment[]

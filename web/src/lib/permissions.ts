@@ -6,6 +6,7 @@ export const PERMISSION_KEYS = [
   "MANAGE_SUPPLIERS",
   "MANAGE_EXPENSES",
   "MANAGE_PROMOTIONS",
+  "BACKDATE_SALES",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

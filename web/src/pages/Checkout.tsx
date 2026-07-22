@@ -41,6 +41,15 @@ type MpesaStatus = "idle" | "sending" | "waiting" | "success" | "failed";
 const MPESA_POLL_INTERVAL_MS = 3000;
 const MPESA_POLL_TIMEOUT_MS = 90_000;
 
+// Formats a Date as the local (not UTC) "YYYY-MM-DDTHH:mm" a
+// <input type="datetime-local"> expects/produces — used both to default the
+// backdate picker to right now and to cap it so a sale can be backdated but
+// never postdated.
+function toDatetimeLocalValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function Checkout() {
   const [query, setQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -88,12 +97,19 @@ export function Checkout() {
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null);
   const [showHeld, setShowHeld] = useState(false);
+  // "" means not backdating — the sale uses the real current time like
+  // normal. Only shown/settable for a user with BACKDATE_SALES (or ADMIN);
+  // see canBackdate below. Holds a <input type="datetime-local"> value
+  // (local time, no timezone), matching how Reports' custom date range
+  // already parses local date/time strings elsewhere in this app.
+  const [backdateAt, setBackdateAt] = useState("");
   const [mpesaPhone, setMpesaPhone] = useState("");
   const [mpesaStatus, setMpesaStatus] = useState<MpesaStatus>("idle");
   const [mpesaError, setMpesaError] = useState<string | null>(null);
   const [mpesaReceiptNumber, setMpesaReceiptNumber] = useState<string | null>(null);
 
   const { user } = useAuth();
+  const canBackdate = user?.role === "ADMIN" || !!user?.permissions?.BACKDATE_SALES;
 
   useEffect(() => {
     void isApiReachable().then((reachable) => {
@@ -205,6 +221,7 @@ export function Checkout() {
     setNewCustomerName("");
     setNewCustomerPhone("");
     setNewCustomerError(null);
+    setBackdateAt("");
     setSplitRows([
       { method: "CASH", amount: 0 },
       { method: "MPESA", amount: 0 },
@@ -255,7 +272,11 @@ export function Checkout() {
     if (paymentMethod === "SPLIT" && splitRemaining > 0.01) return;
 
     const clientId = newClientId();
-    const createdAt = new Date().toISOString();
+    // A backdated sale uses the chosen date/time as its effective date; the
+    // real moment of entry is still tracked separately server-side (see
+    // Sale.enteredAt) regardless of what's picked here.
+    const isBackdating = canBackdate && !!backdateAt;
+    const createdAt = isBackdating ? new Date(backdateAt).toISOString() : new Date().toISOString();
     await queueSale({
       clientId,
       items: cart.map((l) => ({ productId: l.product.id, name: l.product.name, quantity: l.quantity, unitPrice: l.product.price })),
@@ -263,6 +284,7 @@ export function Checkout() {
       amountTendered: paymentMethod === "CASH" ? tendered : undefined,
       status: "COMPLETED",
       createdAt,
+      backdated: isBackdating || undefined,
       customerId: customer?.id,
       customerName: customer?.name,
       couponCode: couponCode.trim() || undefined,
@@ -765,6 +787,34 @@ export function Checkout() {
               className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
             />
           </label>
+
+          {canBackdate && (
+            <div className="text-sm">
+              <label className="flex items-center gap-2 font-medium text-brand-ink">
+                <input
+                  type="checkbox"
+                  checked={!!backdateAt}
+                  onChange={(e) => setBackdateAt(e.target.checked ? toDatetimeLocalValue(new Date()) : "")}
+                />
+                Backdate this sale
+              </label>
+              {backdateAt && (
+                <>
+                  <input
+                    type="datetime-local"
+                    value={backdateAt}
+                    max={toDatetimeLocalValue(new Date())}
+                    onChange={(e) => setBackdateAt(e.target.value)}
+                    aria-label="Backdated sale date and time"
+                    className="mt-1.5 w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
+                  />
+                  <p className="mt-1 text-xs text-brand-inkMuted">
+                    This sale will be dated to the time above. The actual time you entered it is still recorded for the audit trail.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="mt-auto flex flex-col gap-2 border-t border-brand-border pt-4">
             <div className="flex justify-between text-sm text-brand-inkMuted">

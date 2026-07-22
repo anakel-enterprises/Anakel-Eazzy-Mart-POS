@@ -117,6 +117,11 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
       .map((s) => ({
         id: s.clientId,
         createdAt: s.createdAt,
+        // The server hasn't assigned a real enteredAt yet — "now" is the
+        // best local estimate until this sale actually syncs (same
+        // estimate-until-sync caveat as its total/items below).
+        enteredAt: new Date().toISOString(),
+        isBackdated: !!s.backdated,
         total: s.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0),
         paymentMethod: s.paymentMethod,
         status: "COMPLETED",
@@ -289,7 +294,14 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
                       expanded ? "bg-brand-bg" : ""
                     }`}
                   >
-                    <span className="text-brand-inkMuted">{createdAt.toLocaleTimeString("en-KE", { hour: "numeric", minute: "2-digit" })}</span>
+                    <span className="text-brand-inkMuted">
+                      {createdAt.toLocaleTimeString("en-KE", { hour: "numeric", minute: "2-digit" })}
+                      {s.isBackdated && (
+                        <span className="ml-1 rounded-full bg-brand-warnBg px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand-warn">
+                          Backdated
+                        </span>
+                      )}
+                    </span>
                     <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
                     <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
                     <span className="text-brand-inkMuted">{PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}</span>
@@ -302,6 +314,12 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
                       <div className="mb-2 text-xs font-semibold text-brand-inkMuted">
                         Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
                       </div>
+                      {s.isBackdated && (
+                        <div className="mb-2 text-xs font-semibold text-brand-warn">
+                          Dated to {createdAt.toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })} — actually entered{" "}
+                          {new Date(s.enteredAt).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })}
+                        </div>
+                      )}
                       <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
                         <span>ITEM</span>
                         <span>QTY</span>

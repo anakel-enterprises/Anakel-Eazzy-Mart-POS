@@ -167,6 +167,7 @@ async function doFlushPendingSales(): Promise<{ synced: number; failed: number }
         couponCode: sale.couponCode,
         splitPayments: sale.splitPayments,
         mpesaCheckoutRequestId: sale.mpesaCheckoutRequestId,
+        backdated: sale.backdated,
       };
       // Sync as whoever actually rang this up, not whoever happens to be
       // logged in on this device right now — see PendingSale.authToken.

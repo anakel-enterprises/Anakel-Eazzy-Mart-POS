@@ -25,6 +25,13 @@ const createSaleSchema = z.object({
   amountTendered: z.number().nonnegative().optional(),
   status: z.enum(["HELD", "COMPLETED"]).default("COMPLETED"),
   createdAt: z.string().datetime().optional(),
+  // Explicit signal that `createdAt` was deliberately chosen to be earlier
+  // than now, distinct from the ordinary offline-sync case where createdAt
+  // legitimately predates the request just because the device was offline —
+  // that case never sets this and needs no permission. Gated below on
+  // BACKDATE_SALES so an unpermitted cashier can't backdate by hand-crafting
+  // a request even though createdAt itself stays open to everyone.
+  backdated: z.boolean().optional(),
   customerId: z.string().optional(),
   couponCode: z.string().optional(),
   creditDueDate: z.string().datetime().optional(),
@@ -47,6 +54,11 @@ salesRouter.post(
   requirePermission("MAKE_SALES"),
   asyncHandler(async (req, res) => {
     const data = createSaleSchema.parse(req.body);
+
+    if (data.backdated && req.auth!.role !== "ADMIN" && !req.auth!.permissions.BACKDATE_SALES) {
+      res.status(403).json({ error: "You don't have permission to backdate sales" });
+      return;
+    }
 
     const existing = await prisma.sale.findUnique({
       where: { clientId: data.clientId },
@@ -256,6 +268,10 @@ salesRouter.post(
           creditDueDate,
           mpesaReceiptNumber: mpesaTransaction?.mpesaReceiptNumber,
           createdAt: data.createdAt ? new Date(data.createdAt) : undefined,
+          // enteredAt is deliberately left unset here — its column default
+          // (now()) is what makes it trustworthy as "the real moment this
+          // record was created", so it must never come from client input.
+          isBackdated: data.backdated === true,
           items: { create: lineItems },
           splitPayments:
             data.paymentMethod === "SPLIT" && data.status === "COMPLETED"
