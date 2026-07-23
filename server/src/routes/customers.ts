@@ -12,7 +12,7 @@ customersRouter.get(
   "/",
   asyncHandler(async (req, res) => {
     const { q } = req.query;
-    const where: Record<string, unknown> = { storeId: req.auth!.storeId };
+    const where: Record<string, unknown> = { storeId: req.auth!.storeId, active: true };
     if (typeof q === "string" && q.trim()) {
       where.OR = [
         { name: { contains: q, mode: "insensitive" } },
@@ -30,7 +30,7 @@ customersRouter.get(
   "/credit",
   asyncHandler(async (req, res) => {
     const customers = await prisma.customer.findMany({
-      where: { storeId: req.auth!.storeId, creditBalance: { gt: 0 } },
+      where: { storeId: req.auth!.storeId, active: true, creditBalance: { gt: 0 } },
       orderBy: { creditBalance: "desc" },
     });
 
@@ -96,6 +96,27 @@ customersRouter.put(
     }
     const customer = await prisma.customer.update({ where: { id: existing.id }, data });
     res.json(customer);
+  })
+);
+
+customersRouter.delete(
+  "/:id",
+  requirePermission("MANAGE_CUSTOMERS"),
+  asyncHandler(async (req, res) => {
+    const existing = await prisma.customer.findFirst({
+      where: { id: req.params.id, storeId: req.auth!.storeId },
+    });
+    if (!existing) {
+      res.status(404).json({ error: "Customer not found" });
+      return;
+    }
+    // Deliberately no balance-must-be-zero guard: this section is where a
+    // shop writes off a customer they've given up collecting from, so an
+    // outstanding balance is an expected reason to delete, not a blocker.
+    // Sale/payment history and the balance figure itself are untouched —
+    // deleting just hides them from listings (see Product.active).
+    await prisma.customer.update({ where: { id: existing.id }, data: { active: false } });
+    res.status(204).end();
   })
 );
 

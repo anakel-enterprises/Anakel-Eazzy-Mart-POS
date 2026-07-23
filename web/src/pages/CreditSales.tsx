@@ -91,6 +91,22 @@ export function CreditSales() {
     }
   }
 
+  async function deleteCustomer(c: CreditCustomer) {
+    const balance = Number(c.creditBalance);
+    const warning =
+      balance > 0
+        ? `Delete "${c.name}"? They still owe ${currencyFmt.format(balance)} — deleting them removes this debt from Credit Sales tracking. Their sale history is kept, but they'll no longer show up here or be selectable at Checkout.`
+        : `Delete "${c.name}"? They'll no longer show up in Credit Sales or be selectable at Checkout.`;
+    if (!window.confirm(warning)) return;
+    try {
+      await api.delete(`/api/customers/${c.id}`);
+      if (expandedCustomer?.id === c.id) setExpandedCustomer(null);
+      await load();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Couldn't delete this customer — try again.");
+    }
+  }
+
   const totalOutstanding = displayCustomers.reduce((sum, c) => sum + Number(c.creditBalance), 0);
 
   return (
@@ -152,13 +168,21 @@ export function CreditSales() {
                       // payment against until it does.
                       <span className="text-xs text-brand-inkMuted">Syncing…</span>
                     ) : (
-                      <Button
-                        variant="secondary"
-                        className="w-fit px-3 py-1.5 text-xs"
-                        onClick={() => setPayingCustomer({ id: c.id, name: c.name, balance: Number(c.creditBalance) })}
-                      >
-                        Record payment
-                      </Button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          variant="secondary"
+                          className="w-fit px-3 py-1.5 text-xs"
+                          onClick={() => setPayingCustomer({ id: c.id, name: c.name, balance: Number(c.creditBalance) })}
+                        >
+                          Record payment
+                        </Button>
+                        <button
+                          onClick={() => deleteCustomer(c)}
+                          className="w-fit rounded-md px-2 py-1.5 text-xs font-semibold text-brand-warn hover:bg-brand-warnBg"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
