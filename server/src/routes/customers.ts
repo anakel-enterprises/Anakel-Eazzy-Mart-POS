@@ -99,16 +99,43 @@ customersRouter.put(
   })
 );
 
+const creditPaymentSplitSchema = z.object({
+  method: z.enum(["CASH", "MPESA_MANUAL"]),
+  amount: z.number().positive(),
+});
+
 const paymentSchema = z.object({
   amount: z.number().positive(),
+  // The three choices the "Record payment" modal offers — M-Pesa here means
+  // the same cashier-asserted "already paid, just recording it" trust level
+  // as a manual M-Pesa sale (MPESA_MANUAL), not an STK push.
+  method: z.enum(["CASH", "MPESA_MANUAL", "SPLIT"]),
   notes: z.string().optional(),
+  splitPayments: z.array(creditPaymentSplitSchema).optional(),
 });
+
+const PAYMENT_SPLIT_ROUNDING_TOLERANCE = 0.01;
 
 customersRouter.post(
   "/:id/payments",
   requirePermission("MANAGE_CUSTOMERS"),
   asyncHandler(async (req, res) => {
     const data = paymentSchema.parse(req.body);
+
+    if (data.method === "SPLIT") {
+      if (!data.splitPayments || data.splitPayments.length < 2) {
+        res.status(400).json({ error: "Split payments need at least two payment methods" });
+        return;
+      }
+      const splitSum = data.splitPayments.reduce((sum, p) => sum + p.amount, 0);
+      if (Math.abs(splitSum - data.amount) > PAYMENT_SPLIT_ROUNDING_TOLERANCE) {
+        res.status(400).json({
+          error: `Split amounts (${splitSum.toFixed(2)}) don't match the payment total (${data.amount.toFixed(2)})`,
+        });
+        return;
+      }
+    }
+
     const customer = await prisma.customer.findFirst({
       where: { id: req.params.id, storeId: req.auth!.storeId },
     });
@@ -123,9 +150,15 @@ customersRouter.post(
           storeId: req.auth!.storeId,
           customerId: customer.id,
           amount: data.amount,
+          method: data.method,
           notes: data.notes,
           recordedById: req.auth!.userId,
+          splits:
+            data.method === "SPLIT"
+              ? { create: data.splitPayments!.map((p) => ({ method: p.method, amount: p.amount })) }
+              : undefined,
         },
+        include: { splits: true },
       }),
       prisma.customer.update({
         where: { id: customer.id },

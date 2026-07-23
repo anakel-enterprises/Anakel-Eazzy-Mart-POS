@@ -9,6 +9,7 @@ import type { CreditCustomer } from "../types/reports";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
 import { CreditSaleHistory } from "../components/CreditSaleHistory";
+import { RecordPaymentModal, type CreditPaymentSubmission } from "../components/RecordPaymentModal";
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
 
@@ -21,9 +22,9 @@ export function CreditSales() {
   const [stale, setStale] = useState(false);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [payingId, setPayingId] = useState<string | null>(null);
-  const [amount, setAmount] = useState("");
+  // Which customer the "Record payment" modal is open for — carries their
+  // current balance too, so the modal can default the amount field to it.
+  const [payingCustomer, setPayingCustomer] = useState<{ id: string; name: string; balance: number } | null>(null);
   // Which customer's credit-sale-by-credit-sale history (with line items)
   // is on screen below the table — at most one at a time.
   const [expandedCustomer, setExpandedCustomer] = useState<{ id: string; name: string } | null>(null);
@@ -78,15 +79,15 @@ export function CreditSales() {
     };
   }, []);
 
-  async function recordPayment(customerId: string) {
-    setError(null);
+  async function recordPayment(customerId: string, data: CreditPaymentSubmission) {
     try {
-      await api.post(`/api/customers/${customerId}/payments`, { amount: Number(amount) });
-      setAmount("");
-      setPayingId(null);
+      await api.post(`/api/customers/${customerId}/payments`, data);
+      setPayingCustomer(null);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't record payment");
+      // Re-thrown so the modal itself shows the error and stays open,
+      // rather than it silently closing on a failed save.
+      throw err instanceof ApiError ? new Error(err.message) : err;
     }
   }
 
@@ -116,7 +117,6 @@ export function CreditSales() {
             {creditSaleCount === 1 ? "hasn't" : "haven't"} synced yet — balances are estimates until they do.
           </div>
         )}
-        {error && <div className="text-sm font-medium text-brand-warn">{error}</div>}
         <Card>
           <div className="overflow-x-auto">
             <div className="min-w-[640px]">
@@ -151,23 +151,12 @@ export function CreditSales() {
                       // doesn't know this id, so there's nothing to record a
                       // payment against until it does.
                       <span className="text-xs text-brand-inkMuted">Syncing…</span>
-                    ) : payingId === c.id ? (
-                      <div className="flex gap-2">
-                        <input
-                          autoFocus
-                          type="number"
-                          min="0"
-                          placeholder="Amount"
-                          value={amount}
-                          onChange={(e) => setAmount(e.target.value)}
-                          className="w-24 rounded-lg border border-brand-border px-2 py-1 text-sm"
-                        />
-                        <Button className="px-2 py-1 text-xs" onClick={() => void recordPayment(c.id)}>
-                          Save
-                        </Button>
-                      </div>
                     ) : (
-                      <Button variant="secondary" className="w-fit px-3 py-1.5 text-xs" onClick={() => setPayingId(c.id)}>
+                      <Button
+                        variant="secondary"
+                        className="w-fit px-3 py-1.5 text-xs"
+                        onClick={() => setPayingCustomer({ id: c.id, name: c.name, balance: Number(c.creditBalance) })}
+                      >
                         Record payment
                       </Button>
                     )}
@@ -189,6 +178,15 @@ export function CreditSales() {
           />
         )}
       </div>
+
+      {payingCustomer && (
+        <RecordPaymentModal
+          customerName={payingCustomer.name}
+          outstanding={payingCustomer.balance}
+          onClose={() => setPayingCustomer(null)}
+          onSubmit={(data) => recordPayment(payingCustomer.id, data)}
+        />
+      )}
     </>
   );
 }

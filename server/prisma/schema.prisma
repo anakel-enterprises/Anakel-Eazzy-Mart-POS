@@ -379,13 +379,30 @@ model CreditPayment {
   customerId   String
   customer     Customer @relation(fields: [customerId], references: [id])
   amount       Decimal  @db.Decimal(12, 2)
+  // CASH, MPESA_MANUAL, or SPLIT (see splits below for the breakdown) — the
+  // same three choices Checkout's "Record payment" modal offers.
+  method       PaymentMethod
   notes        String?
   recordedById String
   recordedBy   User     @relation(fields: [recordedById], references: [id])
   createdAt    DateTime @default(now())
 
+  splits CreditPaymentSplit[]
+
   @@index([storeId])
   @@index([customerId])
+}
+
+// Only populated when CreditPayment.method is SPLIT — the breakdown across
+// methods, same shape as SalePayment for a split sale.
+model CreditPaymentSplit {
+  id              String        @id @default(cuid())
+  creditPaymentId String
+  creditPayment   CreditPayment @relation(fields: [creditPaymentId], references: [id], onDelete: Cascade)
+  method          PaymentMethod
+  amount          Decimal       @db.Decimal(12, 2)
+
+  @@index([creditPaymentId])
 }
 
 model Supplier {
