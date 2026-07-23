@@ -20,9 +20,11 @@ export function StatCard({
   deltaTone?: "positive" | "warning";
 }) {
   return (
-    <Card className="flex flex-col gap-2">
-      <span className="text-[12.5px] font-semibold text-brand-inkMuted">{label}</span>
-      <span className="font-display text-[26px] font-bold text-brand-ink">{value}</span>
+    <Card className="flex min-w-0 flex-col gap-2">
+      <span className="truncate text-[12.5px] font-semibold text-brand-inkMuted">{label}</span>
+      <span className="truncate font-display text-[26px] font-bold text-brand-ink" title={value}>
+        {value}
+      </span>
       {delta && (
         <span
           className={`text-xs font-semibold ${
