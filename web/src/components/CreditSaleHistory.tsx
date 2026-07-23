@@ -3,7 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { api, ApiError } from "../lib/api";
 import { getCached } from "../lib/cachedFetch";
 import { isLocalCustomerId, localDb } from "../db/localDb";
-import { SALES_SYNCED_EVENT } from "../lib/sync";
+import { SALES_SYNCED_EVENT, undoLastSale } from "../lib/sync";
 import type { SaleHistoryRow } from "../types/reports";
 import { Card } from "./ui";
 
@@ -107,14 +107,39 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
   }, [sales, unsyncedSales, customerId, customerName]);
 
   // Sales still sitting in the overlay above have no server id yet, so
-  // there's nothing for the void endpoint to act on until they sync.
-  const unsyncedIds = useMemo(
+  // there's nothing for the void endpoint to act on until they sync — they
+  // get their own delete path below (undoLastSale) instead. Keyed by
+  // clientId -> syncStatus so a permanently failed sale (which will never
+  // finish "syncing" on its own — see Topbar's retry button) can say so
+  // instead of looking stuck forever under a generic "Syncing…".
+  const unsyncedStatus = useMemo(
     () =>
-      new Set(
-        unsyncedSales.filter((s) => s.paymentMethod === "CREDIT" && s.customerId === customerId).map((s) => s.clientId)
+      new Map(
+        unsyncedSales
+          .filter((s) => s.paymentMethod === "CREDIT" && s.customerId === customerId)
+          .map((s) => [s.clientId, s.syncStatus] as const)
       ),
     [unsyncedSales, customerId]
   );
+
+  const [deletingUnsyncedId, setDeletingUnsyncedId] = useState<string | null>(null);
+
+  async function handleDeleteUnsynced(clientId: string, e: MouseEvent) {
+    e.stopPropagation();
+    if (
+      !window.confirm(
+        "Delete this sale? It hasn't synced to the server yet, so this just cancels it on this device — you can ring it up again from Checkout."
+      )
+    ) {
+      return;
+    }
+    setDeletingUnsyncedId(clientId);
+    const result = await undoLastSale(clientId);
+    setDeletingUnsyncedId(null);
+    if (!result.ok) {
+      alert(result.message ?? "Couldn't delete this sale — try again.");
+    }
+  }
 
   async function handleDeleteSale(sale: SaleHistoryRow, e: MouseEvent) {
     e.stopPropagation();
@@ -174,7 +199,7 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
             {mergedSales.map((s) => {
               const createdAt = new Date(s.createdAt);
               const expanded = expandedSaleId === s.id;
-              const unsynced = unsyncedIds.has(s.id);
+              const unsyncedState = unsyncedStatus.get(s.id);
               return (
                 <div key={s.id} className="border-b border-brand-border/60">
                   <button
@@ -195,8 +220,24 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
                     <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
                     <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
                     <span className="text-brand-inkMuted">{s.cashier?.name ?? "—"}</span>
-                    {unsynced ? (
-                      <span className="text-xs text-brand-inkMuted">Syncing…</span>
+                    {unsyncedState ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs text-brand-inkMuted">
+                          {unsyncedState === "error" ? "Failed to sync" : "Syncing…"}
+                        </span>
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => handleDeleteUnsynced(s.id, e)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") handleDeleteUnsynced(s.id, e as unknown as MouseEvent);
+                          }}
+                          className="w-fit rounded-md px-2 py-1 text-xs font-semibold text-brand-warn hover:bg-brand-warnBg"
+                          aria-disabled={deletingUnsyncedId === s.id}
+                        >
+                          {deletingUnsyncedId === s.id ? "Deleting…" : "Delete"}
+                        </span>
+                      </div>
                     ) : (
                       <span
                         role="button"
