@@ -1,7 +1,15 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb, newClientId, type CachedProduct, type SplitPaymentEntry } from "../db/localDb";
-import { queueSale, queueCustomerCreate, refreshProductCache, refreshCustomerCache, undoLastSale } from "../lib/sync";
+import {
+  queueSale,
+  queueCustomerCreate,
+  refreshProductCache,
+  refreshCustomerCache,
+  searchCustomersLive,
+  undoLastSale,
+  CUSTOMER_REMAPPED_EVENT,
+} from "../lib/sync";
 import { api, ApiError, isApiReachable } from "../lib/api";
 import { getCached } from "../lib/cachedFetch";
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS } from "../lib/paymentMethods";
@@ -53,6 +61,15 @@ function toDatetimeLocalValue(d: Date): string {
 export function Checkout() {
   const [query, setQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Belt-and-suspenders against a double-tap on "Save & select" (easy to do
+  // on a touchscreen till) firing createCustomerInline twice before React
+  // commits the `creatingCustomer`-disabled state — each call would
+  // otherwise queue its own separate customer create under a different
+  // local id, syncing into two genuinely duplicate server-side records for
+  // what the cashier intended as one customer. Checked synchronously,
+  // outside React's render cycle, so there's no window for a second click
+  // to slip through.
+  const creatingCustomerRef = useRef(false);
   const [cart, setCart] = useState<CartLine[]>([]);
   // A quantity field being actively retyped — tracked separately from the
   // cart itself so clearing the digits to type a new number (e.g. changing
@@ -124,17 +141,44 @@ export function Checkout() {
     void getCached<ReceiptStore>("/api/settings").then((res) => setStoreInfo(res.data)).catch(() => {});
   }, []);
 
-  // Searches this device's cached customer list instead of hitting the
-  // network — same reason product search does the same (see `results`
-  // below): a credit sale needs to work with zero connectivity, and the
-  // cache is refreshed on load/online/periodically (see lib/sync.ts) so it
-  // rarely lags behind by more than a few minutes.
+  // A customer created inline further down (createCustomerInline) is held
+  // here as a `{ id, name, phone }` snapshot under its temporary local id.
+  // Once that customer's own background sync completes, lib/sync.ts's
+  // remapLocalCustomerId swaps the id everywhere *it* can reach (the local
+  // cache, any sale already queued) — but it has no way to reach this
+  // component's own state. Without this, a sale queued after that remap
+  // (routine once online, since syncing a customer created moments earlier
+  // is often faster than finishing the ring-up) would still carry the
+  // now-nonexistent old id and get permanently rejected as "Unknown
+  // customer". This is what keeps the selection itself in sync.
+  useEffect(() => {
+    function onCustomerRemapped(e: Event) {
+      const { oldId, newId } = (e as CustomEvent<{ oldId: string; newId: string }>).detail;
+      setCustomer((prev) => (prev && prev.id === oldId ? { ...prev, id: newId } : prev));
+    }
+    window.addEventListener(CUSTOMER_REMAPPED_EVENT, onCustomerRemapped);
+    return () => window.removeEventListener(CUSTOMER_REMAPPED_EVENT, onCustomerRemapped);
+  }, []);
+
+  // Searches this device's cached customer list first — same reason product
+  // search does the same (see `results` below): a credit sale needs to work
+  // with zero connectivity. Supplemented below by a live, debounced server
+  // search whenever online, since the cache alone (refreshed on load/sync/
+  // every few minutes — see lib/sync.ts) can lag a customer another device
+  // just created, which otherwise tempts "+ Add as new customer" into
+  // creating a genuine duplicate for someone who already exists.
   const customerOptions = useLiveQuery(async () => {
     if (paymentMethod !== "CREDIT" || !customerQuery.trim()) return [];
     const q = customerQuery.trim().toLowerCase();
     const all = await localDb.customers.toArray();
     return all.filter((c) => c.name.toLowerCase().includes(q) || c.phone?.toLowerCase().includes(q)).slice(0, 8);
   }, [customerQuery, paymentMethod], []);
+
+  useEffect(() => {
+    if (paymentMethod !== "CREDIT" || !customerQuery.trim()) return;
+    const handle = setTimeout(() => void searchCustomersLive(customerQuery.trim()), 300);
+    return () => clearTimeout(handle);
+  }, [customerQuery, paymentMethod]);
 
   const results = useLiveQuery(async () => {
     if (!query.trim()) return [];
@@ -431,7 +475,8 @@ export function Checkout() {
   // connection is available. Requires MANAGE_CUSTOMERS (cashiers have it by
   // default), same as the customer search above it, but no connection.
   async function createCustomerInline() {
-    if (!newCustomerName.trim()) return;
+    if (!newCustomerName.trim() || creatingCustomerRef.current) return;
+    creatingCustomerRef.current = true;
     setCreatingCustomer(true);
     setNewCustomerError(null);
     try {
@@ -446,6 +491,7 @@ export function Checkout() {
     } catch {
       setNewCustomerError("Couldn't add customer");
     } finally {
+      creatingCustomerRef.current = false;
       setCreatingCustomer(false);
     }
   }

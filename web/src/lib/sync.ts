@@ -76,14 +76,8 @@ interface ServerCustomer {
   creditBalance: string | number;
 }
 
-// Pulls the customer list down so a credit sale can search/select/create a
-// customer with no connection — same purpose and shape as
-// refreshProductCache. Doesn't `clear()` first for the same reason: a
-// customer created on this device while offline lives here under a
-// local-only id (see isLocalCustomerId) until its own sync completes.
-export async function refreshCustomerCache(): Promise<void> {
-  const customers = await api.get<ServerCustomer[]>("/api/customers");
-  const cached: CachedCustomer[] = customers.map((c) => ({
+function toCachedCustomer(c: ServerCustomer): CachedCustomer {
+  return {
     id: c.id,
     name: c.name,
     phone: c.phone,
@@ -91,7 +85,17 @@ export async function refreshCustomerCache(): Promise<void> {
     type: c.type,
     creditLimit: Number(c.creditLimit),
     creditBalance: Number(c.creditBalance),
-  }));
+  };
+}
+
+// Pulls the customer list down so a credit sale can search/select/create a
+// customer with no connection — same purpose and shape as
+// refreshProductCache. Doesn't `clear()` first for the same reason: a
+// customer created on this device while offline lives here under a
+// local-only id (see isLocalCustomerId) until its own sync completes.
+export async function refreshCustomerCache(): Promise<void> {
+  const customers = await api.get<ServerCustomer[]>("/api/customers");
+  const cached = customers.map(toCachedCustomer);
   const serverIds = new Set(cached.map((c) => c.id));
 
   await localDb.transaction("rw", localDb.customers, async () => {
@@ -100,6 +104,24 @@ export async function refreshCustomerCache(): Promise<void> {
     if (staleIds.length > 0) await localDb.customers.bulkDelete(staleIds);
     await localDb.customers.bulkPut(cached);
   });
+}
+
+// A live, on-demand supplement to the full periodic refresh above — used
+// while a cashier is actively typing into Checkout's credit-customer
+// search, so a customer another device just created (or that simply hasn't
+// made it into this device's cache yet, refreshed only on login/sync/every
+// few minutes — see CACHE_REFRESH_INTERVAL_MS) is still found instead of
+// tempting a duplicate "+ Add as new customer". Best-effort: any failure
+// (most commonly being offline) is silently ignored, leaving whatever the
+// local cache already has as the only source of truth, same as every other
+// offline fallback in this file.
+export async function searchCustomersLive(query: string): Promise<void> {
+  try {
+    const customers = await api.get<ServerCustomer[]>(`/api/customers?q=${encodeURIComponent(query)}`);
+    await localDb.customers.bulkPut(customers.map(toCachedCustomer));
+  } catch {
+    // Offline or request failed — local cache results stand as-is.
+  }
 }
 
 export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncError" | "authToken">): Promise<void> {
@@ -671,6 +693,20 @@ export async function queueCustomerCreate(input: NewCustomerInput): Promise<stri
   return clientId;
 }
 
+// Fired once a customer created inline at Checkout finishes syncing and
+// gets remapped from its temporary local id to a real server id. The remap
+// below already fixes up the cached row and any sale *already sitting in
+// the pending-sales queue* — but a customer just selected in Checkout only
+// exists as a `{ id, name, phone }` snapshot in that component's own React
+// state, which this module has no way to reach directly. Without this
+// event, a sale queued *after* the remap (the common case once online —
+// syncing a customer created seconds earlier is often faster than a
+// cashier can finish ringing up the sale) still carries the old id, which
+// by then maps to nothing at all, and the sale is rejected by the server
+// with "Unknown customer" — indefinitely, since nothing ever revisits it.
+// Checkout listens for this to swap its selected customer's id in place.
+export const CUSTOMER_REMAPPED_EVENT = "pos:customer-remapped";
+
 // Rewrites every local reference to a just-synced customer from its
 // temporary local id to the real id the server assigned — same pattern as
 // remapLocalProductId.
@@ -688,6 +724,7 @@ async function remapLocalCustomerId(oldId: string, newId: string): Promise<void>
       await localDb.pendingSales.update(sale.clientId, { customerId: newId });
     }
   });
+  window.dispatchEvent(new CustomEvent(CUSTOMER_REMAPPED_EVENT, { detail: { oldId, newId } }));
 }
 
 let customersFlushInFlight: Promise<{ synced: number; failed: number }> | null = null;
