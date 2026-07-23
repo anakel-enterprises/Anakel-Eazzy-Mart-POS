@@ -8,6 +8,7 @@ import { overlayCreditSales } from "../lib/offlineStats";
 import type { CreditCustomer } from "../types/reports";
 import { Topbar } from "../components/Topbar";
 import { Button, Card } from "../components/ui";
+import { CreditSaleHistory } from "../components/CreditSaleHistory";
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
 
@@ -23,6 +24,9 @@ export function CreditSales() {
   const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
+  // Which customer's credit-sale-by-credit-sale history (with line items)
+  // is on screen below the table — at most one at a time.
+  const [expandedCustomer, setExpandedCustomer] = useState<{ id: string; name: string } | null>(null);
 
   // Sales rung up on this device the server doesn't know about yet — every
   // sale, even while online, is queued locally and synced in the background
@@ -127,7 +131,14 @@ export function CreditSales() {
                 const overdue = isOverdue(c.oldestDueDate);
                 return (
                   <div key={c.id} className="grid grid-cols-5 items-center border-b border-brand-border/60 py-2.5 text-sm">
-                    <span className="font-semibold text-brand-ink">{c.name}</span>
+                    <button
+                      onClick={() => setExpandedCustomer(expandedCustomer?.id === c.id ? null : { id: c.id, name: c.name })}
+                      className={`w-fit text-left font-semibold hover:underline ${
+                        expandedCustomer?.id === c.id ? "text-brand-accentDeep" : "text-brand-ink"
+                      }`}
+                    >
+                      {c.name}
+                    </button>
                     <span className="text-brand-inkMuted">{c.phone ?? "—"}</span>
                     <span className="font-bold text-brand-warn">{currencyFmt.format(Number(c.creditBalance))}</span>
                     <span className={overdue ? "font-bold text-brand-warn" : "text-brand-inkMuted"}>
@@ -169,6 +180,14 @@ export function CreditSales() {
             </div>
           </div>
         </Card>
+
+        {expandedCustomer && (
+          <CreditSaleHistory
+            customerId={expandedCustomer.id}
+            customerName={expandedCustomer.name}
+            onClose={() => setExpandedCustomer(null)}
+          />
+        )}
       </div>
     </>
   );

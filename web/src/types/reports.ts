@@ -92,6 +92,10 @@ export interface SaleHistoryRow {
   status: string;
   items: SaleHistoryItem[];
   customer: { name: string } | null;
+  // Only present from GET /api/customers/:id/sales (the Credit Sales
+  // drill-down) — every other SaleHistoryRow source is already scoped to
+  // one cashier, so showing who rang it up would be redundant there.
+  cashier?: { name: string };
 }
 
 export interface ProfitLossReport {

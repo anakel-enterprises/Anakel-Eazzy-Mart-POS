@@ -148,3 +148,21 @@ customersRouter.get(
     res.json(payments);
   })
 );
+
+// A customer's complete credit-sale history with line items — the
+// drill-down behind "click a sale to see what was sold" on the Credit
+// Sales page. Deliberately open beyond requireAuth (same as GET
+// /:id/payments above), not gated behind VIEW_REPORTS/MANAGE_CUSTOMERS —
+// any cashier who can see this customer owes money needs to be able to see
+// what was actually sold to them, not just admins/managers.
+customersRouter.get(
+  "/:id/sales",
+  asyncHandler(async (req, res) => {
+    const sales = await prisma.sale.findMany({
+      where: { storeId: req.auth!.storeId, customerId: req.params.id, paymentMethod: "CREDIT", status: "COMPLETED" },
+      include: { items: true, cashier: { select: { name: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(sales);
+  })
+);
