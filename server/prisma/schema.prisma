@@ -122,6 +122,7 @@ model Store {
   promotions           Promotion[]
   coupons              Coupon[]
   mpesaTransactions    MpesaTransaction[]
+  refunds              Refund[]
 }
 
 model User {
@@ -147,6 +148,7 @@ model User {
   requestedExpenses    Expense[]             @relation("ExpenseRequestedBy")
   approvedExpenses     Expense[]             @relation("ExpenseApprovedBy")
   mpesaTransactions    MpesaTransaction[]
+  refunds              Refund[]
 
   @@index([storeId])
 }
@@ -250,6 +252,7 @@ model Sale {
   items            SaleItem[]
   splitPayments    SalePayment[]
   mpesaTransaction MpesaTransaction?
+  refunds          Refund[]
 
   @@index([storeId])
   @@index([storeId, createdAt])
@@ -277,7 +280,59 @@ model SaleItem {
   quantity  Int
   lineTotal Decimal @db.Decimal(12, 2)
 
+  refundItems RefundItem[]
+
   @@index([saleId])
+}
+
+// A customer bringing back some (or all) of what they bought on a completed
+// sale — distinct from POST /sales/:id/void, which only undoes a cashier's
+// own moments-ago mistake within a short window. A refund can happen days
+// later, for just some of the items on the sale, and always keeps a full
+// audit trail (this row + its RefundItems) rather than pretending the
+// original sale never happened. `method` is how the money actually moved
+// back to the customer — CASH/MPESA_MANUAL out of the till, or CREDIT to
+// knock the refunded amount off what they owe (only valid when the sale has
+// a customerId). Processing a refund restores each item's stock and
+// decrements the sale's own `total` by the refunded amount, so every
+// existing revenue query that sums Sale.total keeps working unchanged;
+// SaleItem itself is never touched, so a reprinted receipt still shows
+// exactly what was originally bought.
+model Refund {
+  id        String        @id @default(cuid())
+  storeId   String
+  store     Store         @relation(fields: [storeId], references: [id])
+  saleId    String
+  sale      Sale          @relation(fields: [saleId], references: [id])
+  cashierId String
+  cashier   User          @relation(fields: [cashierId], references: [id])
+  method    PaymentMethod
+  total     Decimal       @db.Decimal(12, 2)
+  reason    String?
+  createdAt DateTime      @default(now())
+  // Client-generated id so a refund queued offline (see queueRefund) and
+  // retried on sync never gets double-applied — same idempotency pattern as
+  // Sale/Product/Customer.
+  clientId  String        @unique
+
+  items RefundItem[]
+
+  @@index([storeId])
+  @@index([saleId])
+}
+
+model RefundItem {
+  id         String   @id @default(cuid())
+  refundId   String
+  refund     Refund   @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  saleItemId String
+  saleItem   SaleItem @relation(fields: [saleItemId], references: [id])
+  quantity   Int
+  unitPrice  Decimal  @db.Decimal(12, 2)
+  lineTotal  Decimal  @db.Decimal(12, 2)
+
+  @@index([refundId])
+  @@index([saleItemId])
 }
 
 // One row per Safaricom STK Push request. Created PENDING when the push is

@@ -372,6 +372,162 @@ salesRouter.post(
   })
 );
 
+const refundItemSchema = z.object({
+  saleItemId: z.string(),
+  quantity: z.number().int().positive(),
+});
+
+const refundSchema = z.object({
+  // Lets a refund queued offline (see web's queueRefund) retry a dropped
+  // response on sync without risking a duplicate — same idempotency
+  // pattern as Sale/Customer/Product.
+  clientId: z.string().min(1),
+  items: z.array(refundItemSchema).min(1),
+  // How the money actually goes back: cash/M-Pesa out of the till, or
+  // knocked off what the customer owes (only valid when the sale has a
+  // customerId). Defaults are chosen client-side; the server just enforces
+  // that CREDIT has somewhere to apply to.
+  method: z.enum(["CASH", "MPESA_MANUAL", "CREDIT"]),
+  reason: z.string().optional(),
+});
+
+// A customer bringing back some or all of what they bought on an already
+// completed sale — realistically hours or days later, for maybe just one of
+// several items, which is exactly what POST /:id/void doesn't support (it
+// only reverses a cashier's own moments-ago mistake, whole-sale, within a
+// short window). No ownership/time-window restriction here on purpose: the
+// person processing a return is very often not whoever rang up the original
+// sale, and "changed their mind" doesn't come with a deadline.
+salesRouter.post(
+  "/:id/refund",
+  requirePermission("MAKE_SALES"),
+  asyncHandler(async (req, res) => {
+    const data = refundSchema.parse(req.body);
+
+    const existingByClientId = await prisma.refund.findUnique({
+      where: { clientId: data.clientId },
+      include: { items: true },
+    });
+    if (existingByClientId) {
+      res.status(200).json(existingByClientId);
+      return;
+    }
+
+    const sale = await prisma.sale.findFirst({
+      where: { id: req.params.id, storeId: req.auth!.storeId },
+      include: { items: true, refunds: { include: { items: true } } },
+    });
+    if (!sale) {
+      res.status(404).json({ error: "Sale not found" });
+      return;
+    }
+    if (sale.status !== "COMPLETED") {
+      res.status(400).json({ error: `This sale is ${sale.status.toLowerCase()} and can't be refunded` });
+      return;
+    }
+    if (data.method === "CREDIT" && !sale.customerId) {
+      res.status(400).json({ error: "This sale has no customer to credit the refund to" });
+      return;
+    }
+
+    // How much of each line item has already come back on an earlier
+    // refund, so this one can't return more than is still actually out with
+    // the customer.
+    const alreadyRefunded = new Map<string, number>();
+    for (const r of sale.refunds) {
+      for (const ri of r.items) {
+        alreadyRefunded.set(ri.saleItemId, (alreadyRefunded.get(ri.saleItemId) ?? 0) + ri.quantity);
+      }
+    }
+
+    const saleItemsById = new Map(sale.items.map((i) => [i.id, i]));
+    let total = new Prisma.Decimal(0);
+    const refundItemsData: {
+      saleItemId: string;
+      productId: string;
+      quantity: number;
+      unitPrice: Prisma.Decimal;
+      lineTotal: Prisma.Decimal;
+    }[] = [];
+
+    for (const reqItem of data.items) {
+      const saleItem = saleItemsById.get(reqItem.saleItemId);
+      if (!saleItem) {
+        res.status(400).json({ error: "One of these items isn't on this sale" });
+        return;
+      }
+      const remaining = saleItem.quantity - (alreadyRefunded.get(saleItem.id) ?? 0);
+      if (reqItem.quantity > remaining) {
+        res.status(400).json({ error: `Only ${remaining} of "${saleItem.name}" can still be refunded from this sale` });
+        return;
+      }
+      const lineTotal = saleItem.unitPrice.mul(reqItem.quantity);
+      total = total.add(lineTotal);
+      refundItemsData.push({
+        saleItemId: saleItem.id,
+        productId: saleItem.productId,
+        quantity: reqItem.quantity,
+        unitPrice: saleItem.unitPrice,
+        lineTotal,
+      });
+    }
+
+    const refund = await prisma.$transaction(async (tx) => {
+      for (const item of refundItemsData) {
+        await tx.product.update({ where: { id: item.productId }, data: { stockQty: { increment: item.quantity } } });
+      }
+
+      if (data.method === "CREDIT" && sale.customerId) {
+        await tx.customer.update({ where: { id: sale.customerId }, data: { creditBalance: { decrement: total } } });
+      }
+
+      // The refunded amount no longer counts as revenue — decrementing
+      // Sale.total in place (rather than leaving it as the original charge)
+      // means every existing report/dashboard query that sums Sale.total
+      // for COMPLETED sales stays correct with no changes of its own.
+      // SaleItem is never touched, so a reprinted receipt still shows
+      // exactly what was originally bought.
+      await tx.sale.update({ where: { id: sale.id }, data: { total: { decrement: total } } });
+
+      const created = await tx.refund.create({
+        data: {
+          clientId: data.clientId,
+          storeId: req.auth!.storeId,
+          saleId: sale.id,
+          cashierId: req.auth!.userId,
+          method: data.method,
+          total,
+          reason: data.reason,
+          items: {
+            create: refundItemsData.map((i) => ({
+              saleItemId: i.saleItemId,
+              quantity: i.quantity,
+              unitPrice: i.unitPrice,
+              lineTotal: i.lineTotal,
+            })),
+          },
+        },
+        include: { items: true },
+      });
+
+      // Fully returned once every line item's cumulative refunded quantity
+      // reaches what was originally sold — flips the sale out of every
+      // COMPLETED-only revenue query the same way void's VOIDED status does.
+      const fullyRefunded = sale.items.every((si) => {
+        const returnedQty = (alreadyRefunded.get(si.id) ?? 0) + (refundItemsData.find((r) => r.saleItemId === si.id)?.quantity ?? 0);
+        return returnedQty >= si.quantity;
+      });
+      if (fullyRefunded) {
+        await tx.sale.update({ where: { id: sale.id }, data: { status: "REFUNDED" } });
+      }
+
+      return created;
+    });
+
+    res.status(201).json(refund);
+  })
+);
+
 salesRouter.get(
   "/",
   asyncHandler(async (req, res) => {
@@ -401,7 +557,12 @@ salesRouter.get(
         ...(cashierFilter ? { cashierId: cashierFilter } : {}),
         ...(typeof paymentMethod === "string" ? { paymentMethod: paymentMethod as never } : {}),
       },
-      include: { items: true, cashier: { select: { name: true } }, customer: { select: { name: true } } },
+      include: {
+        items: true,
+        cashier: { select: { name: true } },
+        customer: { select: { name: true } },
+        refunds: { include: { items: true } },
+      },
       orderBy: { createdAt: "desc" },
       // Scoped to one cashier (an employee's sales history), an explicit
       // limit aside, is meant to be complete rather than truncated at the

@@ -1,4 +1,4 @@
-import type { CachedCustomer, PendingSale } from "../db/localDb";
+import type { CachedCustomer, PendingRefund, PendingSale } from "../db/localDb";
 import type {
   AnalyticsReport,
   CreditCustomer,
@@ -448,10 +448,12 @@ export function overlayEmployeePerformance(
 export function overlayCreditSales(
   data: CreditCustomer[],
   sales: PendingSale[],
-  customerCache: Map<string, CachedCustomer>
+  customerCache: Map<string, CachedCustomer>,
+  refunds: PendingRefund[] = []
 ): CreditCustomer[] {
   const creditSales = sales.filter((s) => s.paymentMethod === "CREDIT" && s.customerId);
-  if (creditSales.length === 0) return data;
+  const creditRefunds = refunds.filter((r) => r.method === "CREDIT" && r.customerId);
+  if (creditSales.length === 0 && creditRefunds.length === 0) return data;
 
   const map = new Map(data.map((c) => [c.id, { ...c, creditBalance: num(c.creditBalance) }]));
 
@@ -478,6 +480,17 @@ export function overlayCreditSales(
       // this sale actually syncs is authoritative.
       oldestDueDate: new Date(new Date(sale.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
     });
+  }
+
+  // A refund knocked straight off a customer's balance instead of handed
+  // over as cash — same "don't wait for sync to show it" reasoning as the
+  // credit sales above. Only ever adjusts a customer already in the
+  // snapshot: unlike a brand-new credit sale, a refund against a customer
+  // the server hasn't reported yet has no sensible starting balance to
+  // subtract from.
+  for (const refund of creditRefunds) {
+    const existing = map.get(refund.customerId!);
+    if (existing) existing.creditBalance = num(existing.creditBalance) - refund.total;
   }
 
   return Array.from(map.values()).sort((a, b) => num(b.creditBalance) - num(a.creditBalance));

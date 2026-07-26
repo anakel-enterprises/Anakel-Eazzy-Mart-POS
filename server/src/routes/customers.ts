@@ -214,7 +214,7 @@ customersRouter.get(
   asyncHandler(async (req, res) => {
     const sales = await prisma.sale.findMany({
       where: { storeId: req.auth!.storeId, customerId: req.params.id, paymentMethod: "CREDIT", status: "COMPLETED" },
-      include: { items: true, cashier: { select: { name: true } } },
+      include: { items: true, cashier: { select: { name: true } }, refunds: { include: { items: true } } },
       orderBy: { createdAt: "desc" },
     });
     res.json(sales);

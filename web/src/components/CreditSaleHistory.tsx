@@ -4,8 +4,10 @@ import { api, ApiError } from "../lib/api";
 import { getCached } from "../lib/cachedFetch";
 import { isLocalCustomerId, localDb } from "../db/localDb";
 import { SALES_SYNCED_EVENT, undoLastSale } from "../lib/sync";
+import { useAuth } from "../context/AuthContext";
 import type { SaleHistoryRow } from "../types/reports";
 import { Card } from "./ui";
+import { RefundModal } from "./RefundModal";
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
 
@@ -28,6 +30,8 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
   // so there's nothing to fetch yet. The one sale that created it is still
   // shown below, via the unsynced-sales overlay.
   const isLocal = isLocalCustomerId(customerId);
+  const { user } = useAuth();
+  const canRefund = user?.role === "ADMIN" || !!user?.permissions?.MAKE_SALES;
 
   const [sales, setSales] = useState<SaleHistoryRow[]>([]);
   const [loading, setLoading] = useState(!isLocal);
@@ -36,9 +40,20 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
   const [deletingSaleId, setDeletingSaleId] = useState<string | null>(null);
+  const [refundingSale, setRefundingSale] = useState<SaleHistoryRow | null>(null);
+  // Bumped after a refund completes to re-run the fetch below and pick up
+  // the sale's new (lower) total and refund history.
+  const [refreshTick, setRefreshTick] = useState(0);
 
+  // Only collapse the expanded row when actually switching customers — not
+  // on a post-refund refreshTick bump, which should leave the sale being
+  // refunded open so the updated remaining-refundable quantity is visible.
   useEffect(() => {
     setExpandedSaleId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerId]);
+
+  useEffect(() => {
     if (isLocal) return;
     let cancelled = false;
     setLoading(true);
@@ -67,7 +82,7 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
       window.removeEventListener("online", load);
       window.removeEventListener(SALES_SYNCED_EVENT, load);
     };
-  }, [customerId, isLocal]);
+  }, [customerId, isLocal, refreshTick]);
 
   // Credit sales rung up on this device that haven't synced yet — every
   // sale is queued locally and synced in the background even while online
@@ -81,6 +96,22 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
     [],
     []
   );
+
+  // Refunds queued on this device that haven't confirmed synced yet — so a
+  // refund just processed shows up in the "already refunded" total right
+  // away instead of only once its own background sync lands.
+  const unsyncedRefunds = useLiveQuery(
+    () => localDb.pendingRefunds.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+  const pendingRefundTotalBySale = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of unsyncedRefunds) {
+      map.set(r.saleId, (map.get(r.saleId) ?? 0) + r.total);
+    }
+    return map;
+  }, [unsyncedRefunds]);
 
   const mergedSales = useMemo(() => {
     const overlay: SaleHistoryRow[] = unsyncedSales
@@ -163,6 +194,7 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
   }
 
   return (
+    <>
     <Card className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -200,6 +232,16 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
               const createdAt = new Date(s.createdAt);
               const expanded = expandedSaleId === s.id;
               const unsyncedState = unsyncedStatus.get(s.id);
+              // s.total already nets out every refund the server has
+              // actually applied — one still sitting in this device's local
+              // queue hasn't reached the server yet, so it's subtracted
+              // here separately to show the true current total without
+              // waiting for that sync.
+              const syncedRefundedTotal = (s.refunds ?? []).reduce((sum, r) => sum + Number(r.total), 0);
+              const pendingRefundedTotal = pendingRefundTotalBySale.get(s.id) ?? 0;
+              const netTotal = Number(s.total) - pendingRefundedTotal;
+              const refundedTotal = syncedRefundedTotal + pendingRefundedTotal;
+              const originalTotal = Number(s.total) + syncedRefundedTotal;
               return (
                 <div key={s.id} className="border-b border-brand-border/60">
                   <button
@@ -218,7 +260,7 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
                       )}
                     </span>
                     <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
-                    <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
+                    <span className="font-semibold text-brand-ink">{currencyFmt.format(netTotal)}</span>
                     <span className="text-brand-inkMuted">{s.cashier?.name ?? "—"}</span>
                     {unsyncedState ? (
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -239,18 +281,39 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
                         </span>
                       </div>
                     ) : (
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => handleDeleteSale(s, e)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") handleDeleteSale(s, e as unknown as MouseEvent);
-                        }}
-                        className="w-fit rounded-md px-2 py-1 text-xs font-semibold text-brand-warn hover:bg-brand-warnBg disabled:opacity-50"
-                        aria-disabled={deletingSaleId === s.id}
-                      >
-                        {deletingSaleId === s.id ? "Deleting…" : "Delete"}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {canRefund && s.status === "COMPLETED" && (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRefundingSale(s);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.stopPropagation();
+                                setRefundingSale(s);
+                              }
+                            }}
+                            className="w-fit rounded-md px-2 py-1 text-xs font-semibold text-brand-accentText hover:bg-brand-accent/10"
+                          >
+                            Refund
+                          </span>
+                        )}
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => handleDeleteSale(s, e)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") handleDeleteSale(s, e as unknown as MouseEvent);
+                          }}
+                          className="w-fit rounded-md px-2 py-1 text-xs font-semibold text-brand-warn hover:bg-brand-warnBg disabled:opacity-50"
+                          aria-disabled={deletingSaleId === s.id}
+                        >
+                          {deletingSaleId === s.id ? "Deleting…" : "Delete"}
+                        </span>
+                      </div>
                     )}
                   </button>
                   {expanded && (
@@ -259,6 +322,13 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
                         <div className="mb-2 text-xs font-semibold text-brand-warn">
                           Dated to {createdAt.toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })} — actually entered{" "}
                           {new Date(s.enteredAt).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })}
+                        </div>
+                      )}
+                      {refundedTotal > 0 && (
+                        <div className="mb-2 text-xs font-semibold text-brand-warn">
+                          {currencyFmt.format(refundedTotal)} refunded
+                          {pendingRefundedTotal > 0 ? " (still syncing)" : ""} — original sale was{" "}
+                          {currencyFmt.format(originalTotal)}
                         </div>
                       )}
                       <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
@@ -284,5 +354,13 @@ export function CreditSaleHistory({ customerId, customerName, onClose }: CreditS
         </div>
       )}
     </Card>
+    {refundingSale && (
+      <RefundModal
+        sale={refundingSale}
+        onClose={() => setRefundingSale(null)}
+        onRefunded={() => setRefreshTick((t) => t + 1)}
+      />
+    )}
+    </>
   );
 }

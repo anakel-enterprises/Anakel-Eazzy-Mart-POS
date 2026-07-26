@@ -72,10 +72,34 @@ export interface EmployeeRow {
 // behind an employee's row in the Reports "Employees" tab.
 export interface SaleHistoryItem {
   id: string;
+  // Absent for the offline/unsynced overlay rows, which reuse `id` as a
+  // productId stand-in since there's no real SaleItem yet (see the
+  // SaleHistoryRow.refunds comment) — refunding is disabled for those rows
+  // anyway, but callers that need to tell the two apart can check this.
+  productId?: string;
   name: string;
   quantity: number;
   unitPrice: string | number;
   lineTotal: string | number;
+}
+
+export interface RefundItemRow {
+  id: string;
+  saleItemId: string;
+  quantity: number;
+  unitPrice: string | number;
+  lineTotal: string | number;
+}
+
+// One refund transaction against a sale — a sale can have several, one per
+// visit a customer makes to return more of what they bought.
+export interface RefundRow {
+  id: string;
+  method: string;
+  total: string | number;
+  reason: string | null;
+  createdAt: string;
+  items: RefundItemRow[];
 }
 
 export interface SaleHistoryRow {
@@ -92,10 +116,21 @@ export interface SaleHistoryRow {
   status: string;
   items: SaleHistoryItem[];
   customer: { name: string } | null;
+  // The customer's id, distinct from `customer.name` above — needed to
+  // queue an offline CREDIT refund against the right person (see
+  // queueRefund/overlayCreditSales). Absent/null for a walk-in sale or for
+  // the offline overlay rows (same reasoning as `refunds` below).
+  customerId?: string | null;
   // Only present from GET /api/customers/:id/sales (the Credit Sales
   // drill-down) — every other SaleHistoryRow source is already scoped to
   // one cashier, so showing who rang it up would be redundant there.
   cashier?: { name: string };
+  // Every refund ever processed against this sale. Undefined (not just
+  // empty) for a sale still sitting in this device's unsynced-sales overlay
+  // — it can't have any refunds yet since the sale itself hasn't reached
+  // the server, which is also exactly why refunding is disabled for those
+  // rows (see the `refunds === undefined` checks at the call sites).
+  refunds?: RefundRow[];
 }
 
 export interface ProfitLossReport {

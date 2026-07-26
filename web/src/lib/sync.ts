@@ -12,6 +12,8 @@ import {
   type PendingProduct,
   type PendingCustomer,
   type PendingStockAdjustment,
+  type PendingRefund,
+  type PendingRefundItem,
 } from "../db/localDb";
 
 interface ServerProduct {
@@ -266,6 +268,100 @@ export async function undoLastSale(clientId: string): Promise<UndoSaleResult> {
   }
 
   return { ok: true, items: row.items };
+}
+
+export interface QueueRefundInput {
+  saleId: string;
+  // Only present when the sale being refunded has a customer — lets the
+  // Credit Sales balance overlay (see overlayCreditSales) knock a CREDIT
+  // refund off the right customer immediately, before this row ever syncs.
+  customerId?: string;
+  items: PendingRefundItem[];
+  method: "CASH" | "MPESA_MANUAL" | "CREDIT";
+  reason?: string;
+}
+
+// A customer bringing back some of what they bought — write-locally-first,
+// same shape as queueSale, so a return can be processed with zero
+// connectivity. Restores this device's cached stock immediately (the
+// server-side restore happens once this actually syncs); the credit-balance
+// side of a CREDIT refund is never mutated directly here, the same way a
+// pending credit sale never mutates it either — see overlayCreditSales,
+// which layers every not-yet-synced sale *and* refund on top of the
+// server's last-known balance at render time instead.
+export async function queueRefund(input: QueueRefundInput): Promise<void> {
+  const clientId = newClientId();
+  const total = input.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+
+  await localDb.transaction("rw", localDb.pendingRefunds, localDb.products, async () => {
+    await localDb.pendingRefunds.put({
+      clientId,
+      saleId: input.saleId,
+      customerId: input.customerId,
+      items: input.items,
+      method: input.method,
+      reason: input.reason,
+      total,
+      createdAt: new Date().toISOString(),
+      authToken: getAuthToken() ?? undefined,
+      syncStatus: "pending",
+    });
+    for (const item of input.items) {
+      const p = await localDb.products.get(item.productId);
+      if (p) await localDb.products.update(p.id, { stockQty: p.stockQty + item.quantity });
+    }
+  });
+
+  void flushPendingRefunds();
+}
+
+let refundsFlushInFlight: Promise<{ synced: number; failed: number }> | null = null;
+
+export function flushPendingRefunds(): Promise<{ synced: number; failed: number }> {
+  if (refundsFlushInFlight) return refundsFlushInFlight;
+  refundsFlushInFlight = doFlushPendingRefunds().finally(() => {
+    refundsFlushInFlight = null;
+  });
+  return refundsFlushInFlight;
+}
+
+async function doFlushPendingRefunds(): Promise<{ synced: number; failed: number }> {
+  let synced = 0;
+  let failed = 0;
+
+  if (!(await isApiReachable())) return { synced: 0, failed: 0 };
+
+  const pending = await localDb.pendingRefunds.where("syncStatus").anyOf("pending", "error").toArray();
+  for (const refund of pending) {
+    try {
+      const payload = {
+        clientId: refund.clientId,
+        items: refund.items.map((i) => ({ saleItemId: i.saleItemId, quantity: i.quantity })),
+        method: refund.method,
+        reason: refund.reason,
+      };
+      if (refund.authToken) {
+        await api.postAsUser(`/api/sales/${refund.saleId}/refund`, payload, refund.authToken);
+      } else {
+        await api.post(`/api/sales/${refund.saleId}/refund`, payload);
+      }
+      await localDb.pendingRefunds.update(refund.clientId, { syncStatus: "synced" });
+      synced++;
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Network error";
+      await localDb.pendingRefunds.update(refund.clientId, { syncStatus: "error", syncError: message });
+      failed++;
+    }
+  }
+
+  if (synced > 0) {
+    // The sale's own total/refund history only actually changed server-side
+    // just now — reuse the sales-synced signal so every list showing a
+    // sale's total or "already refunded" figure refetches.
+    window.dispatchEvent(new Event(SALES_SYNCED_EVENT));
+  }
+
+  return { synced, failed };
 }
 
 export interface NewProductInput {
@@ -785,6 +881,7 @@ export function startBackgroundSync(): () => void {
     void flushPendingStockAdjustments();
     void flushPendingProductDeletes();
     void flushPendingCustomers();
+    void flushPendingRefunds();
   };
   window.addEventListener("online", onlineHandler);
 
@@ -796,6 +893,7 @@ export function startBackgroundSync(): () => void {
     void flushPendingStockAdjustments();
     void flushPendingProductDeletes();
     void flushPendingCustomers();
+    void flushPendingRefunds();
     const now = Date.now();
     if (now - lastCacheRefresh > CACHE_REFRESH_INTERVAL_MS) {
       lastCacheRefresh = now;

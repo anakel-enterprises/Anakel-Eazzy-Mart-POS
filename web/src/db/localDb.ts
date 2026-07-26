@@ -213,6 +213,37 @@ export interface PendingProductDelete {
   syncError?: string;
 }
 
+export interface PendingRefundItem {
+  saleItemId: string;
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+// A customer bringing back some of what they bought, queued for POST
+// /api/sales/:saleId/refund — same write-locally-first shape as PendingSale,
+// so a return can be processed with zero connectivity. `total` is computed
+// once at queue time rather than re-derived everywhere it's displayed.
+// `customerId`/`method` let the Credit Sales balance overlay (see
+// overlayCreditSales) show a knocked-off-the-balance refund immediately,
+// the same way a not-yet-synced credit sale is overlaid onto that balance.
+export interface PendingRefund {
+  clientId: string;
+  saleId: string;
+  customerId?: string;
+  items: PendingRefundItem[];
+  method: "CASH" | "MPESA_MANUAL" | "CREDIT";
+  reason?: string;
+  total: number;
+  createdAt: string;
+  syncStatus: SyncStatus;
+  syncError?: string;
+  // Same reasoning as PendingSale.authToken — whoever is logged in on this
+  // device when the refund finally syncs isn't necessarily whoever actually
+  // processed it.
+  authToken?: string;
+}
+
 class LocalDb extends Dexie {
   products!: Table<CachedProduct, string>;
   pendingSales!: Table<PendingSale, string>;
@@ -225,6 +256,7 @@ class LocalDb extends Dexie {
   pendingProductDeletes!: Table<PendingProductDelete, string>;
   customers!: Table<CachedCustomer, string>;
   pendingCustomers!: Table<PendingCustomer, string>;
+  pendingRefunds!: Table<PendingRefund, string>;
 
   constructor() {
     super("anakel-pos");
@@ -283,6 +315,20 @@ class LocalDb extends Dexie {
       pendingProductDeletes: "productId, syncStatus, createdAt",
       customers: "id, name, phone",
       pendingCustomers: "clientId, syncStatus, createdAt",
+    });
+    this.version(8).stores({
+      products: "id, name, sku, barcode",
+      pendingSales: "clientId, syncStatus, createdAt",
+      heldSales: "id, createdAt",
+      apiCache: "url",
+      offlineCredentials: "email",
+      pendingProducts: "clientId, syncStatus, createdAt",
+      pendingProductEdits: "productId, syncStatus, updatedAt",
+      pendingStockAdjustments: "clientId, productId, syncStatus, createdAt",
+      pendingProductDeletes: "productId, syncStatus, createdAt",
+      customers: "id, name, phone",
+      pendingCustomers: "clientId, syncStatus, createdAt",
+      pendingRefunds: "clientId, saleId, syncStatus, createdAt",
     });
   }
 }

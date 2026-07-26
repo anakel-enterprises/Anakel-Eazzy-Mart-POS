@@ -7,6 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type PaymentMethod } from "../lib/paymentMethods";
 import type { SaleHistoryRow } from "../types/reports";
 import { Card } from "./ui";
+import { RefundModal } from "./RefundModal";
 
 const currencyFmt = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES" });
 
@@ -60,6 +61,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
   // wrong to attribute it to some other employee an admin is looking up in
   // the Reports drill-down.
   const isOwnHistory = cashierId === user?.id;
+  const canRefund = user?.role === "ADMIN" || !!user?.permissions?.MAKE_SALES;
   const [sales, setSales] = useState<SaleHistoryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,9 +71,23 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
   // Which row is expanded to show its line items + customer — at most one
   // at a time, collapsed by default so the table stays scannable.
   const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
+  // Which sale the refund modal is open for — separate from expandedSaleId
+  // so opening it doesn't collapse the row underneath.
+  const [refundingSale, setRefundingSale] = useState<SaleHistoryRow | null>(null);
+  // Bumped after a refund completes to force the fetch effect below to
+  // re-run and pick up the sale's new (lower) total and refund history.
+  const [refreshTick, setRefreshTick] = useState(0);
 
+  // Only reset the expanded row when actually switching employee/filter —
+  // not on a post-refund refreshTick bump, which should leave whatever the
+  // cashier was looking at open so they can see the updated remaining
+  // refundable quantity right away.
   useEffect(() => {
     setExpandedSaleId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cashierId, paymentFilter]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -98,7 +114,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
     return () => {
       cancelled = true;
     };
-  }, [cashierId, paymentFilter]);
+  }, [cashierId, paymentFilter, refreshTick]);
 
   // Sales rung up on this device that the server doesn't know about yet —
   // without this, a sale made while offline wouldn't show up in "My Sales"
@@ -109,6 +125,22 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
     [],
     []
   );
+
+  // Refunds queued on this device that haven't confirmed synced yet — so a
+  // refund just processed shows up in the "already refunded" total right
+  // away instead of only once its own background sync lands.
+  const unsyncedRefunds = useLiveQuery(
+    () => localDb.pendingRefunds.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
+  const pendingRefundTotalBySale = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of unsyncedRefunds) {
+      map.set(r.saleId, (map.get(r.saleId) ?? 0) + r.total);
+    }
+    return map;
+  }, [unsyncedRefunds]);
 
   const mergedSales = useMemo(() => {
     if (!isOwnHistory || unsyncedSales.length === 0) return sales;
@@ -195,6 +227,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
   }, [activeDay, isAdmin]);
 
   return (
+    <>
     <Card className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -285,6 +318,22 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
             {activeDay.sales.map((s) => {
               const createdAt = new Date(s.createdAt);
               const expanded = expandedSaleId === s.id;
+              // s.total already nets out every refund the server has
+              // actually applied (see the Refund model comment) — a refund
+              // still sitting in this device's local queue hasn't reached
+              // the server yet, so it's subtracted here separately to show
+              // the true current total without waiting for that sync.
+              const syncedRefundedTotal = (s.refunds ?? []).reduce((sum, r) => sum + Number(r.total), 0);
+              const pendingRefundedTotal = pendingRefundTotalBySale.get(s.id) ?? 0;
+              const netTotal = Number(s.total) - pendingRefundedTotal;
+              const refundedTotal = syncedRefundedTotal + pendingRefundedTotal;
+              const originalTotal = Number(s.total) + syncedRefundedTotal;
+              // A real, already-synced sale — the offline overlay never sets
+              // `refunds` (see the SaleHistoryRow comment), and refunding
+              // only makes sense for a still-COMPLETED sale (a VOIDED one
+              // never happened as far as revenue is concerned, and a fully
+              // REFUNDED one has nothing left to give back).
+              const canOfferRefund = canRefund && s.refunds !== undefined && s.status === "COMPLETED";
               return (
                 <div key={s.id} className="border-b border-brand-border/60">
                   <button
@@ -303,7 +352,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
                       )}
                     </span>
                     <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
-                    <span className="font-semibold text-brand-ink">{currencyFmt.format(Number(s.total))}</span>
+                    <span className="font-semibold text-brand-ink">{currencyFmt.format(netTotal)}</span>
                     <span className="text-brand-inkMuted">{PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}</span>
                     <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
                       {s.status}
@@ -311,13 +360,30 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
                   </button>
                   {expanded && (
                     <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
-                      <div className="mb-2 text-xs font-semibold text-brand-inkMuted">
-                        Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs font-semibold text-brand-inkMuted">
+                          Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
+                        </div>
+                        {canOfferRefund && (
+                          <button
+                            onClick={() => setRefundingSale(s)}
+                            className="w-fit rounded-md px-2 py-1 text-xs font-semibold text-brand-warn hover:bg-brand-warnBg"
+                          >
+                            Refund
+                          </button>
+                        )}
                       </div>
                       {s.isBackdated && (
                         <div className="mb-2 text-xs font-semibold text-brand-warn">
                           Dated to {createdAt.toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })} — actually entered{" "}
                           {new Date(s.enteredAt).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })}
+                        </div>
+                      )}
+                      {refundedTotal > 0 && (
+                        <div className="mb-2 text-xs font-semibold text-brand-warn">
+                          {currencyFmt.format(refundedTotal)} refunded
+                          {pendingRefundedTotal > 0 ? " (still syncing)" : ""} — original sale was{" "}
+                          {currencyFmt.format(originalTotal)}
                         </div>
                       )}
                       <div className="grid grid-cols-[2fr_0.6fr_0.9fr_0.9fr] gap-2 border-b border-brand-border/60 pb-1.5 text-[11px] font-semibold text-brand-inkMuted">
@@ -355,5 +421,13 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
         <div className="text-xs text-brand-inkMuted">Tap a sale to see the items sold and which customer it went to.</div>
       )}
     </Card>
+    {refundingSale && (
+      <RefundModal
+        sale={refundingSale}
+        onClose={() => setRefundingSale(null)}
+        onRefunded={() => setRefreshTick((t) => t + 1)}
+      />
+    )}
+    </>
   );
 }

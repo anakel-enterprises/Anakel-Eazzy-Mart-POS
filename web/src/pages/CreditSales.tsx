@@ -40,6 +40,14 @@ export function CreditSales() {
     [],
     []
   );
+  // Refunds queued on this device that haven't synced yet — a CREDIT-method
+  // one needs to knock its amount off the matching customer's balance below
+  // the instant it's processed, not just once its own background sync lands.
+  const unsyncedRefunds = useLiveQuery(
+    () => localDb.pendingRefunds.where("syncStatus").anyOf("pending", "error").toArray(),
+    [],
+    []
+  );
   // Only needed to fill in name/phone/creditLimit for a customer created
   // inline during a credit sale that hasn't synced yet — see overlayCreditSales.
   const customerCache = useLiveQuery(
@@ -49,8 +57,8 @@ export function CreditSales() {
   );
 
   const displayCustomers = useMemo(
-    () => overlayCreditSales(customers, unsyncedSales, customerCache),
-    [customers, unsyncedSales, customerCache]
+    () => overlayCreditSales(customers, unsyncedSales, customerCache, unsyncedRefunds),
+    [customers, unsyncedSales, customerCache, unsyncedRefunds]
   );
   const creditSaleCount = unsyncedSales.filter((s) => s.paymentMethod === "CREDIT").length;
 
