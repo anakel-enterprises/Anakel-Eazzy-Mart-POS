@@ -351,8 +351,21 @@ export function Reports() {
             onPeriodChange={setPeriod}
             customFrom={customFrom}
             customTo={customTo}
-            onCustomFromChange={setCustomFrom}
-            onCustomToChange={setCustomTo}
+            // Picking just one side of a custom range used to leave the other
+            // end blank, i.e. unbounded — so tapping a single day in the
+            // "from" box silently summed that day through *now*, growing the
+            // further back it was picked (and pulling in today's sales on
+            // top). Defaulting the still-empty side to match makes one tap
+            // give a single-day report, matching what SalesHistoryPanel's
+            // calendar picker already does below.
+            onCustomFromChange={(v) => {
+              setCustomFrom(v);
+              if (!customTo) setCustomTo(v);
+            }}
+            onCustomToChange={(v) => {
+              setCustomTo(v);
+              if (!customFrom) setCustomFrom(v);
+            }}
           />
         )}
         {!showDateRange && (

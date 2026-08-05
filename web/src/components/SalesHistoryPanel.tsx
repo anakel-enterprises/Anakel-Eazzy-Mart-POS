@@ -304,8 +304,17 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
             <div className="mb-1.5 flex items-baseline gap-2 rounded-md bg-brand-bg px-2 py-1.5">
               <span className="text-[12.5px] font-bold text-brand-ink">{activeDay.dayLabel}</span>
               <span className="text-[11px] text-brand-inkMuted">
-                {activeDay.sales.length} sale{activeDay.sales.length === 1 ? "" : "s"} ·{" "}
-                {currencyFmt.format(activeDay.sales.reduce((sum, s) => sum + Number(s.total), 0))}
+                {activeDay.sales.length} sale{activeDay.sales.length === 1 ? "" : "s"}
+                {/* Day aggregate is only meaningful as a cash-management figure
+                    for whoever's allowed to see the whole store's take — an
+                    employee viewing their own "My Sales" doesn't need (or, per
+                    store policy, get to see) how much they personally rang up
+                    in aggregate, just the per-sale amounts below. An admin
+                    looking at their own history, or anyone drilling into
+                    another employee's history from Reports, still sees it. */}
+                {(isAdmin || !isOwnHistory) && (
+                  <> · {currencyFmt.format(activeDay.sales.reduce((sum, s) => sum + Number(s.total), 0))}</>
+                )}
               </span>
             </div>
             <div className="grid grid-cols-[0.7fr_0.7fr_0.9fr_1.1fr_0.9fr] gap-2 border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
