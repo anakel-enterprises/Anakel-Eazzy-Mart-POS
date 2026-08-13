@@ -38,8 +38,15 @@ reportsRouter.get(
   asyncHandler(async (req, res) => {
     const storeId = req.auth!.storeId;
     const today = startOfStoreDay(new Date());
-    const weekAgo = new Date(today);
-    weekAgo.setDate(weekAgo.getDate() - 6);
+    // Calendar week (Monday–Sunday), not a trailing 7-day window — a rolling
+    // window drops its oldest day every time "today" advances, which can
+    // make the weekly total *fall* the moment a strong day ages out even
+    // though no sales were removed. A shop owner's "this week" should only
+    // grow through the week and reset at the next Monday.
+    const todayDow = new Date(today.getTime() + STORE_UTC_OFFSET_MS).getUTCDay(); // 0=Sun..6=Sat, store-local
+    const daysSinceMonday = (todayDow + 6) % 7;
+    const weekStart = new Date(today);
+    weekStart.setDate(weekStart.getDate() - daysSinceMonday);
 
     const [todaySales, weekSales, lowStock, recentSales] = await Promise.all([
       prisma.sale.aggregate({
@@ -48,7 +55,7 @@ reportsRouter.get(
         _count: true,
       }),
       prisma.sale.findMany({
-        where: { storeId, status: "COMPLETED", createdAt: { gte: weekAgo } },
+        where: { storeId, status: "COMPLETED", createdAt: { gte: weekStart } },
         select: { total: true, createdAt: true },
       }),
       prisma.$queryRaw<
@@ -68,9 +75,12 @@ reportsRouter.get(
       }),
     ]);
 
+    // Zero-fills the whole Mon–Sun week, including days later than today —
+    // those stay at 0 and simply render as empty bars, same as how "today"
+    // itself starts at 0 each morning.
     const dayBuckets: Record<string, number> = {};
     for (let i = 0; i < 7; i++) {
-      const d = new Date(weekAgo);
+      const d = new Date(weekStart);
       d.setDate(d.getDate() + i);
       dayBuckets[storeDayKey(d)] = 0;
     }
