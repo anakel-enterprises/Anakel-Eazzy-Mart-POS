@@ -68,8 +68,13 @@ function periodRange(period: Period, customFrom: string, customTo: string): { fr
     case "Today":
       return { from: startOfToday, to: now };
     case "This Week": {
+      // Calendar week (Monday–Sunday), matching the Dashboard's "Weekly
+      // Total" tile — not a trailing 7-day window, which would make the
+      // total dip whenever a strong day ages out of the window even though
+      // nothing was actually removed.
+      const daysSinceMonday = (startOfToday.getDay() + 6) % 7; // getDay(): 0=Sun..6=Sat
       const from = new Date(startOfToday);
-      from.setDate(from.getDate() - 6);
+      from.setDate(from.getDate() - daysSinceMonday);
       return { from, to: now };
     }
     case "This Month":
