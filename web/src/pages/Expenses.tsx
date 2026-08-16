@@ -42,6 +42,9 @@ export function Expenses() {
   const [showForm, setShowForm] = useState(false);
   const [expenseForm, setExpenseForm] = useState({ categoryId: "", amount: "", description: "" });
   const [incomeForm, setIncomeForm] = useState({ source: "", amount: "", description: "" });
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [categoryError, setCategoryError] = useState<string | null>(null);
 
   async function load() {
     const [cats, exp, inc] = await Promise.all([
@@ -97,6 +100,23 @@ export function Expenses() {
     await load();
   }
 
+  async function addCategory() {
+    const name = newCategoryName.trim();
+    if (!name) return;
+    setCategoryError(null);
+    try {
+      const category = await api.post<Category>("/api/expenses/categories", { name });
+      setCategories((prev) => [...prev, category].sort((a, b) => a.name.localeCompare(b.name)));
+      // Immediately usable for the expense being entered right now, instead
+      // of making the admin re-open the dropdown to pick what they just typed.
+      setExpenseForm((f) => ({ ...f, categoryId: category.id }));
+      setAddingCategory(false);
+      setNewCategoryName("");
+    } catch (err) {
+      setCategoryError(err instanceof ApiError ? err.message : "Couldn't add category");
+    }
+  }
+
   return (
     <>
       <Topbar title="Expenses & Income" subtitle="Track spending and other income, with approval for expenses" />
@@ -122,13 +142,26 @@ export function Expenses() {
         {showForm && tab === "expenses" && (
           <Card>
             <form onSubmit={submitExpense} className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-              <select required value={expenseForm.categoryId} onChange={(e) => setExpenseForm({ ...expenseForm, categoryId: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm">
+              <select
+                required={!addingCategory}
+                value={expenseForm.categoryId}
+                onChange={(e) => {
+                  if (e.target.value === "__add__") {
+                    setAddingCategory(true);
+                    setCategoryError(null);
+                  } else {
+                    setExpenseForm({ ...expenseForm, categoryId: e.target.value });
+                  }
+                }}
+                className="rounded-lg border border-brand-border px-3 py-2 text-sm"
+              >
                 <option value="">Select category</option>
                 {categories.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
                   </option>
                 ))}
+                {canDecide && <option value="__add__">+ Add new category…</option>}
               </select>
               <input required type="number" min="0" step="0.01" placeholder="Amount (KSh)" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} className="rounded-lg border border-brand-border px-3 py-2 text-sm" />
               <ClearableInput
@@ -138,6 +171,33 @@ export function Expenses() {
                 onClear={() => setExpenseForm({ ...expenseForm, description: "" })}
                 className="rounded-lg border border-brand-border px-3 py-2 text-sm"
               />
+              {addingCategory && (
+                <div className="col-span-full flex flex-wrap items-center gap-2 rounded-lg bg-brand-bg p-3">
+                  <ClearableInput
+                    autoFocus
+                    placeholder="New category name (e.g. Water)"
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    onClear={() => setNewCategoryName("")}
+                    className="flex-1 rounded-lg border border-brand-border px-3 py-2 text-sm"
+                  />
+                  <Button type="button" className="px-3 py-2 text-xs" onClick={() => void addCategory()}>
+                    Add category
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddingCategory(false);
+                      setNewCategoryName("");
+                      setCategoryError(null);
+                    }}
+                    className="text-xs font-semibold text-brand-inkMuted hover:text-brand-ink"
+                  >
+                    Cancel
+                  </button>
+                  {categoryError && <div className="w-full text-xs font-medium text-brand-warn">{categoryError}</div>}
+                </div>
+              )}
               {error && <div className="col-span-full text-sm font-medium text-brand-warn">{error}</div>}
               <div className="col-span-full">
                 <Button type="submit">Submit for approval</Button>
