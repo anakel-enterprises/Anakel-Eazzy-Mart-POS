@@ -116,7 +116,7 @@ async function main() {
     update: {},
     create: { storeId: store.id, name: "Rent" },
   });
-  for (const name of ["Utilities", "Transport", "Wages"]) {
+  for (const name of ["Electricity", "Transport", "Salaries"]) {
     await prisma.expenseCategory.upsert({
       where: { storeId_name: { storeId: store.id, name } },
       update: {},

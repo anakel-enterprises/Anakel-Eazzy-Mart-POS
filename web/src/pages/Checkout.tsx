@@ -209,6 +209,17 @@ export function Checkout() {
   const splitAllocated = splitRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
   const splitRemaining = Math.round((total - splitAllocated) * 100) / 100;
 
+  // Shared by every action that's "done with the search field for now" —
+  // adding an item, changing a quantity, dismissing the post-sale modal —
+  // so the next scan/keystroke always lands there with no extra click and
+  // no leftover text to manually clear first.
+  function refocusSearch() {
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+  }
+
   function addToCart(product: CachedProduct) {
     setCart((prev) => {
       const existing = prev.find((l) => l.product.id === product.id);
@@ -218,23 +229,26 @@ export function Checkout() {
       return [...prev, { product, quantity: 1 }];
     });
     setQuery("");
-    // Clicking a search result moves focus to that result button — return
-    // it to the search field (and select whatever's still in it) so the
-    // next scan/keystroke lands there immediately, with no extra click and
-    // no leftover text to manually clear first.
-    requestAnimationFrame(() => {
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
-    });
+    refocusSearch();
   }
 
-  // The +/− buttons and the ✕ button are the only deliberate ways to change
-  // a line to zero (removing it) — see editingQty above for why the text
-  // input itself never does this via onChange.
-  function updateQuantity(productId: string, quantity: number) {
+  // Live-updates a line's quantity (and therefore the cart subtotal/total)
+  // without moving focus — used while a quantity is still being typed, so
+  // the total visibly keeps pace with each keystroke instead of only
+  // catching up once the field is committed.
+  function setLineQuantity(productId: string, quantity: number) {
     setCart((prev) =>
       quantity <= 0 ? prev.filter((l) => l.product.id !== productId) : prev.map((l) => (l.product.id === productId ? { ...l, quantity } : l))
     );
+  }
+
+  // The +/− buttons, the ✕ button, and a committed (blur/Enter) quantity
+  // edit — every *discrete, done-now* way to change a line's quantity —
+  // go through this instead of setLineQuantity directly, so the search
+  // field reliably gets focus back afterwards for the next scan.
+  function updateQuantity(productId: string, quantity: number) {
+    setLineQuantity(productId, quantity);
+    refocusSearch();
   }
 
   // Commits an in-progress quantity edit on blur/Enter. An empty, zero, or
@@ -577,7 +591,19 @@ export function Checkout() {
                         setEditingQty({ productId: line.product.id, value: String(line.quantity) });
                         e.target.select();
                       }}
-                      onChange={(e) => setEditingQty({ productId: line.product.id, value: e.target.value })}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setEditingQty({ productId: line.product.id, value });
+                        // Commit each valid keystroke immediately so the
+                        // line/cart totals update live as the digits are
+                        // typed, not just once the field is left — an
+                        // in-progress invalid value (empty, "0") is still
+                        // held in editingQty without touching the cart.
+                        const parsed = Math.trunc(Number(value));
+                        if (Number.isFinite(parsed) && parsed >= 1) {
+                          setLineQuantity(line.product.id, parsed);
+                        }
+                      }}
                       onBlur={commitQtyEdit}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") e.currentTarget.blur();
@@ -926,6 +952,10 @@ export function Checkout() {
               onClick={() => {
                 setCompletedSale(null);
                 setUndoError(null);
+                // The modal was covering the search field until now — send
+                // focus there the moment it's actually reachable again,
+                // ready for the next customer's first scan/keystroke.
+                refocusSearch();
               }}
             >
               New sale
