@@ -59,6 +59,19 @@ export interface PendingSale {
   // be the active session's at the time. Optional only for rows queued
   // before this field existed.
   authToken?: string;
+  // Who actually rang this sale up, captured at the same moment as
+  // authToken and for the same shared-device reason — but this pair is for
+  // *local, still-unsynced display* (Dashboard's "Recent Orders", Reports'
+  // "Sales by employee", "My Sales"), not the sync POST itself. Before this
+  // existed, every one of those views blindly attributed every unsynced sale
+  // sitting in this device's queue to *whoever is currently logged in*, so a
+  // cashier's sale still waiting to sync when the admin (or another cashier)
+  // next logged in on the same device would visibly show up as that other
+  // person's — including inflating their "My Sales"/employee totals with
+  // sales they never made. Optional only for rows queued before this
+  // existed, which fall back to the old (occasionally-wrong) behavior.
+  cashierId?: string;
+  cashierName?: string;
   // The real server-assigned Sale id, set once this row's POST actually
   // succeeds. Undoing a sale after it's synced needs this to call
   // POST /api/sales/:id/void — the clientId is only meaningful locally.

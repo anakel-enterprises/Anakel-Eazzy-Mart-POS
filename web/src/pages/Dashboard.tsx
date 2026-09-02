@@ -80,6 +80,12 @@ export function Dashboard() {
 
   const maxWeekly = displayData ? Math.max(...displayData.weeklySales.map((d) => d.total), 1) : 1;
   const unsyncedCount = unsyncedSales?.length ?? 0;
+  // A sale in "error" status already reached the server and was rejected on
+  // every retry so far (e.g. it references a product whose own sync is
+  // itself stuck) — it will keep failing identically no matter how long
+  // this device stays online, unlike a merely-"pending" sale still waiting
+  // for connectivity. See Reports > "My Sales" for which sale(s) and why.
+  const failedCount = unsyncedSales?.filter((s) => s.syncStatus === "error").length ?? 0;
 
   return (
     <>
@@ -95,10 +101,17 @@ export function Dashboard() {
             Will update automatically once you're back online.
           </div>
         )}
-        {!error && unsyncedCount > 0 && (
+        {!error && unsyncedCount - failedCount > 0 && (
           <div className="rounded-lg bg-brand-accent/10 px-3 py-2 text-sm font-medium text-brand-accentText">
-            Includes {unsyncedCount} sale{unsyncedCount === 1 ? "" : "s"} made on this device that {unsyncedCount === 1 ? "hasn't" : "haven't"}{" "}
-            synced yet — figures are estimates until they do.
+            Includes {unsyncedCount - failedCount} sale{unsyncedCount - failedCount === 1 ? "" : "s"} made on this device that{" "}
+            {unsyncedCount - failedCount === 1 ? "hasn't" : "haven't"} synced yet — figures are estimates until they do.
+          </div>
+        )}
+        {!error && failedCount > 0 && (
+          <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+            {failedCount} sale{failedCount === 1 ? "" : "s"} made on this device {failedCount === 1 ? "has" : "have"} been rejected by the
+            server every time it retried — {failedCount === 1 ? "it" : "they"} will keep failing until fixed, and won't count toward any report
+            elsewhere until then. Check My Sales for the reason.
           </div>
         )}
 

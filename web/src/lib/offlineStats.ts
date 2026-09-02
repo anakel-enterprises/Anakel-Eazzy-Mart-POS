@@ -134,7 +134,13 @@ export function overlayDashboard(
       paymentMethod: sale.paymentMethod,
       status: "COMPLETED",
       items: sale.items.map((i) => ({ quantity: i.quantity })),
-      cashier: { name: currentUser.name || "You" },
+      // Whoever actually rang this up (see PendingSale.cashierId/cashierName)
+      // — not necessarily currentUser. A sale queued by a different employee
+      // on this same shared device, still unsynced when currentUser later
+      // logged in here, must keep showing as its real cashier's, not get
+      // relabeled as whoever's looking at Recent Orders right now. Only a
+      // legacy row queued before that field existed falls back to currentUser.
+      cashier: { name: sale.cashierName || currentUser.name || "You" },
       createdAt: sale.createdAt,
     });
   }
@@ -421,18 +427,39 @@ export function overlayEmployeePerformance(
   sales: PendingSale[],
   currentUser: { id: string; name: string }
 ): EmployeeRow[] {
-  if (sales.length === 0 || !currentUser.id) return data;
+  if (sales.length === 0) return data;
 
-  const totalDelta = sales.reduce((sum, s) => sum + estimateSaleTotal(s), 0);
-  const existing = data.some((r) => r.cashierId === currentUser.id);
-  const rows = data.map((r) =>
-    r.cashierId === currentUser.id
-      ? { ...r, totalSales: num(r.totalSales) + totalDelta, transactionCount: num(r.transactionCount) + sales.length }
-      : { ...r, totalSales: num(r.totalSales), transactionCount: num(r.transactionCount) }
-  );
-  if (!existing) {
-    rows.push({ cashierId: currentUser.id, name: currentUser.name, totalSales: totalDelta, transactionCount: sales.length });
+  // Group each unsynced sale under its real author (see
+  // PendingSale.cashierId), not whoever's currently viewing this report — a
+  // shared device can have another employee's sale still sitting in the
+  // local queue, and crediting all of it to whoever's logged in right now
+  // would inflate their totals with sales they never made (and hide it from
+  // the employee who actually made it). Only a legacy row queued before
+  // cashierId existed falls back to currentUser, the old best guess.
+  const deltaByEmployee = new Map<string, { name: string; total: number; count: number }>();
+  for (const s of sales) {
+    const id = s.cashierId || currentUser.id;
+    if (!id) continue;
+    const name = s.cashierId ? s.cashierName || "Unknown" : currentUser.name;
+    const entry = deltaByEmployee.get(id) ?? { name, total: 0, count: 0 };
+    entry.total += estimateSaleTotal(s);
+    entry.count += 1;
+    deltaByEmployee.set(id, entry);
   }
+
+  const rows = data.map((r) => {
+    const delta = deltaByEmployee.get(r.cashierId);
+    if (!delta) return { ...r, totalSales: num(r.totalSales), transactionCount: num(r.transactionCount) };
+    deltaByEmployee.delete(r.cashierId);
+    return { ...r, totalSales: num(r.totalSales) + delta.total, transactionCount: num(r.transactionCount) + delta.count };
+  });
+  // Whatever's left has no synced sales for the period at all yet (e.g. a
+  // cashier's very first sale of the day is still unsynced) — give them a
+  // row instead of silently dropping their total.
+  for (const [cashierId, delta] of deltaByEmployee) {
+    rows.push({ cashierId, name: delta.name, totalSales: delta.total, transactionCount: delta.count });
+  }
+
   return rows.sort((a, b) => b.totalSales - a.totalSales);
 }
 
