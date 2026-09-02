@@ -24,15 +24,22 @@ interface Category {
 export function ProductDetailModal({
   product,
   categories,
+  syncError,
   onClose,
   onSaved,
 }: {
   product: ProductDetail;
   categories: Category[];
+  // Set when this product's last sync attempt was rejected by the server
+  // (e.g. a duplicate SKU) rather than merely still waiting for
+  // connectivity — it will keep failing identically on every retry until
+  // whatever the server objected to is actually changed here and saved.
+  syncError?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [name, setName] = useState(product.name);
+  const [sku, setSku] = useState(product.sku);
   const [categoryId, setCategoryId] = useState(product.categoryId ?? "");
   const [price, setPrice] = useState(String(product.price));
   const [cost, setCost] = useState(product.cost != null ? String(product.cost) : "");
@@ -62,6 +69,14 @@ export function ProductDetailModal({
       setError("Enter a valid stock adjustment.");
       return;
     }
+    // SKU is only editable for a still-local, never-synced product (see
+    // below) — mainly so a create stuck failing on a duplicate SKU (the
+    // server enforces uniqueness per store) has an actual fix available
+    // instead of only "delete this and start over."
+    if (isLocalProductId(product.id) && !sku.trim()) {
+      setError("Enter a SKU.");
+      return;
+    }
     setSaving(true);
 
     const costNum = cost.trim() === "" ? undefined : Number(cost);
@@ -75,6 +90,7 @@ export function ProductDetailModal({
       // against, so fold the edit straight into the still-pending create.
       await patchPendingProduct(product.id, {
         name: name.trim(),
+        sku: sku.trim(),
         categoryId: categoryId || undefined,
         categoryName,
         price: priceNum,
@@ -122,6 +138,13 @@ export function ProductDetailModal({
           </button>
         </div>
 
+        {syncError && (
+          <div className="mb-3 rounded-lg bg-brand-warnBg px-3 py-2 text-xs font-medium text-brand-warn">
+            This product hasn't reached the server yet — every sync attempt so far has been rejected with: "{syncError}". It's only visible on
+            this device until that's fixed and saved below.
+          </div>
+        )}
+
         <div className="flex flex-col gap-3">
           <label className="text-sm">
             <span className="mb-1 block font-medium text-brand-ink">Product name</span>
@@ -133,7 +156,19 @@ export function ProductDetailModal({
             />
           </label>
 
-          <div className="text-xs text-brand-inkMuted">SKU: {product.sku}</div>
+          {isLocalProductId(product.id) ? (
+            <label className="text-sm">
+              <span className="mb-1 block font-medium text-brand-ink">SKU</span>
+              <ClearableInput
+                value={sku}
+                onChange={(e) => setSku(e.target.value)}
+                onClear={() => setSku("")}
+                className="w-full rounded-lg border border-brand-border px-3 py-2"
+              />
+            </label>
+          ) : (
+            <div className="text-xs text-brand-inkMuted">SKU: {product.sku}</div>
+          )}
 
           <label className="text-sm">
             <span className="mb-1 block font-medium text-brand-ink">Category</span>
