@@ -131,6 +131,11 @@ export interface SaleHistoryRow {
   // the server, which is also exactly why refunding is disabled for those
   // rows (see the `refunds === undefined` checks at the call sites).
   refunds?: RefundRow[];
+  // Set only for an offline-overlay row whose sync has actually been
+  // rejected by the server on every retry so far (as opposed to merely
+  // still waiting for connectivity) — the reason why, so it can be shown
+  // instead of a "COMPLETED" status that implies nothing is wrong.
+  syncFailed?: string;
 }
 
 export interface ProfitLossReport {

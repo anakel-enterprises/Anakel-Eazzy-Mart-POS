@@ -1,4 +1,4 @@
-import { api, ApiError, getAuthToken, isApiReachable } from "./api";
+import { api, ApiError, getAuthToken, getAuthUser, isApiReachable } from "./api";
 import {
   localDb,
   isLocalProductId,
@@ -126,8 +126,15 @@ export async function searchCustomersLive(query: string): Promise<void> {
   }
 }
 
-export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncError" | "authToken">): Promise<void> {
-  await localDb.pendingSales.put({ ...sale, authToken: getAuthToken() ?? undefined, syncStatus: "pending" });
+export async function queueSale(sale: Omit<PendingSale, "syncStatus" | "syncError" | "authToken" | "cashierId" | "cashierName">): Promise<void> {
+  const authUser = getAuthUser();
+  await localDb.pendingSales.put({
+    ...sale,
+    authToken: getAuthToken() ?? undefined,
+    cashierId: authUser?.id,
+    cashierName: authUser?.name,
+    syncStatus: "pending",
+  });
   void flushPendingSales();
 }
 

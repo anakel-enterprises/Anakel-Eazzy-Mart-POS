@@ -94,6 +94,20 @@ export function getAuthToken(): string | null {
   return getToken();
 }
 
+// Whoever is actually logged in on this device right now — used to snapshot
+// *who* queued an offline write (see PendingSale.cashierId/cashierName),
+// separate from getAuthToken's snapshot of *what to sync it as*.
+export function getAuthUser(): { id: string; name: string } | null {
+  const raw = localStorage.getItem("auth_user");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.id === "string" && typeof parsed?.name === "string" ? { id: parsed.id, name: parsed.name } : null;
+  } catch {
+    return null;
+  }
+}
+
 // A real reachability check — navigator.onLine only reports whether *some*
 // network interface is up, not whether the API is actually reachable (e.g.
 // connected to a WiFi router with no internet, or a captive portal).

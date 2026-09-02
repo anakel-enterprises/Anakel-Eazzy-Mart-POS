@@ -181,6 +181,11 @@ export function Reports() {
   );
 
   const unsyncedCountForTab = tab === "Inventory" ? unsyncedSales.length : periodSales.length;
+  // A sale in "error" status already reached the server and was rejected on
+  // every retry so far — it keeps failing identically no matter how long
+  // this device stays online, unlike a merely-"pending" sale still waiting
+  // for connectivity. See "My Sales" for which sale(s) and why.
+  const failedCountForTab = (tab === "Inventory" ? unsyncedSales : periodSales).filter((s) => s.syncStatus === "error").length;
 
   function rangeQuery() {
     const { from, to } = periodRange(period, customFrom, customTo);
@@ -343,10 +348,17 @@ export function Reports() {
             Will update automatically once you're back online.
           </div>
         )}
-        {!permissionError && !loadError && tab !== "Suppliers" && unsyncedCountForTab > 0 && (
+        {!permissionError && !loadError && tab !== "Suppliers" && unsyncedCountForTab - failedCountForTab > 0 && (
           <div className="rounded-lg bg-brand-accent/10 px-3 py-2 text-sm font-medium text-brand-accentText">
-            Includes {unsyncedCountForTab} sale{unsyncedCountForTab === 1 ? "" : "s"} made on this device that{" "}
-            {unsyncedCountForTab === 1 ? "hasn't" : "haven't"} synced yet — figures are estimates until they do.
+            Includes {unsyncedCountForTab - failedCountForTab} sale{unsyncedCountForTab - failedCountForTab === 1 ? "" : "s"} made on this
+            device that {unsyncedCountForTab - failedCountForTab === 1 ? "hasn't" : "haven't"} synced yet — figures are estimates until they do.
+          </div>
+        )}
+        {!permissionError && !loadError && tab !== "Suppliers" && failedCountForTab > 0 && (
+          <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+            {failedCountForTab} sale{failedCountForTab === 1 ? "" : "s"} made on this device {failedCountForTab === 1 ? "has" : "have"} been
+            rejected by the server every time it retried — {failedCountForTab === 1 ? "it's" : "they're"} still counted in these figures as an
+            estimate, but will keep failing (and stay invisible on every other device) until fixed. Check My Sales for the reason.
           </div>
         )}
 

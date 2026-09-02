@@ -145,6 +145,13 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
   const mergedSales = useMemo(() => {
     if (!isOwnHistory || unsyncedSales.length === 0) return sales;
     const overlay: SaleHistoryRow[] = unsyncedSales
+      // A shared device can have another employee's sale still sitting
+      // unsynced in this same local queue — without this, viewing your own
+      // "My Sales" would merge in whatever *anyone else* rang up on this
+      // device before it synced, as if it were yours. A legacy row queued
+      // before cashierId existed has no way to verify authorship, so it
+      // still falls back to showing up here (the old behavior).
+      .filter((s) => (s.cashierId ? s.cashierId === user?.id : true))
       .filter((s) => !paymentFilter || s.paymentMethod === paymentFilter)
       .map((s) => ({
         id: s.clientId,
@@ -165,9 +172,10 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
           lineTotal: i.unitPrice * i.quantity,
         })),
         customer: s.customerName ? { name: s.customerName } : null,
+        syncFailed: s.syncStatus === "error" ? s.syncError || "Rejected by the server" : undefined,
       }));
     return [...overlay, ...sales].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [sales, unsyncedSales, isOwnHistory, paymentFilter]);
+  }, [sales, unsyncedSales, isOwnHistory, paymentFilter, user?.id]);
 
   // Groups the (already newest-first) sales history into per-day sections —
   // a long-tenured employee's "complete history" can span months, so a
@@ -363,12 +371,27 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
                     <span>{s.items.reduce((n, i) => n + i.quantity, 0)}</span>
                     <span className="font-semibold text-brand-ink">{currencyFmt.format(netTotal)}</span>
                     <span className="text-brand-inkMuted">{PAYMENT_METHOD_LABELS[s.paymentMethod as PaymentMethod] ?? s.paymentMethod}</span>
-                    <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
-                      {s.status}
-                    </span>
+                    {s.syncFailed ? (
+                      <span
+                        title={`Sync failed, and will keep failing until this is fixed: ${s.syncFailed}`}
+                        className="w-fit rounded-full bg-brand-warnBg px-2.5 py-1 text-[11.5px] font-bold text-brand-warn"
+                      >
+                        SYNC FAILED
+                      </span>
+                    ) : (
+                      <span className="w-fit rounded-full bg-brand-accent/20 px-2.5 py-1 text-[11.5px] font-bold text-brand-accentText">
+                        {s.status}
+                      </span>
+                    )}
                   </button>
                   {expanded && (
                     <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
+                      {s.syncFailed && (
+                        <div className="mb-2 rounded-lg bg-brand-warnBg px-3 py-2 text-xs font-medium text-brand-warn">
+                          This sale hasn't reached the server yet — every sync attempt so far has been rejected with: "{s.syncFailed}". It's
+                          only visible on this device, and won't count toward any report elsewhere, until that's fixed.
+                        </div>
+                      )}
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <div className="text-xs font-semibold text-brand-inkMuted">
                           Sold to <span className="text-brand-ink">{s.customer?.name ?? "Walk-in customer (no name recorded)"}</span>
