@@ -3,6 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { ApiError } from "../lib/api";
 import { getCached } from "../lib/cachedFetch";
 import { localDb } from "../db/localDb";
+import { undoLastSale } from "../lib/sync";
 import { useAuth } from "../context/AuthContext";
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type PaymentMethod } from "../lib/paymentMethods";
 import type { SaleHistoryRow } from "../types/reports";
@@ -77,6 +78,10 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
   // Bumped after a refund completes to force the fetch effect below to
   // re-run and pick up the sale's new (lower) total and refund history.
   const [refreshTick, setRefreshTick] = useState(0);
+  // Which permanently-failed unsynced sale is mid-delete — admin-only (see
+  // handleDeleteFailedSale), since there's no refund path for a sale that
+  // never reached the server in the first place.
+  const [deletingFailedId, setDeletingFailedId] = useState<string | null>(null);
 
   // Only reset the expanded row when actually switching employee/filter —
   // not on a post-refund refreshTick bump, which should leave whatever the
@@ -234,6 +239,28 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
       .sort((a, b) => b.total - a.total);
   }, [activeDay, isAdmin]);
 
+  // A permanently-failed sale (see the syncFailed banner below) will never
+  // reach the server on its own — there's no void/refund endpoint to call
+  // since the server has never heard of it. undoLastSale already handles
+  // exactly this case for a still-local sale: it restores the stock and
+  // drops the local queue row, with nothing to contact server-side. Admin
+  // only, since this is a data-correction tool, not an everyday cashier action.
+  async function handleDeleteFailedSale(clientId: string) {
+    if (
+      !window.confirm(
+        "Delete this sale? It never reached the server, so this just cancels it on this device and restores the stock. You can ring it up again from Checkout once the underlying sync problem is fixed."
+      )
+    ) {
+      return;
+    }
+    setDeletingFailedId(clientId);
+    const result = await undoLastSale(clientId);
+    setDeletingFailedId(null);
+    if (!result.ok) {
+      alert(result.message ?? "Couldn't delete this sale — try again.");
+    }
+  }
+
   return (
     <>
     <Card className="flex flex-col gap-3">
@@ -387,9 +414,20 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
                   {expanded && (
                     <div className="mb-2 rounded-lg bg-brand-bg px-3 py-3 text-sm">
                       {s.syncFailed && (
-                        <div className="mb-2 rounded-lg bg-brand-warnBg px-3 py-2 text-xs font-medium text-brand-warn">
-                          This sale hasn't reached the server yet — every sync attempt so far has been rejected with: "{s.syncFailed}". It's
-                          only visible on this device, and won't count toward any report elsewhere, until that's fixed.
+                        <div className="mb-2 flex flex-col gap-2 rounded-lg bg-brand-warnBg px-3 py-2 text-xs font-medium text-brand-warn">
+                          <div>
+                            This sale hasn't reached the server yet — every sync attempt so far has been rejected with: "{s.syncFailed}". It's
+                            only visible on this device, and won't count toward any report elsewhere, until that's fixed.
+                          </div>
+                          {isAdmin && (
+                            <button
+                              onClick={() => void handleDeleteFailedSale(s.id)}
+                              disabled={deletingFailedId === s.id}
+                              className="w-fit rounded-md bg-white px-2 py-1 font-semibold text-brand-warn hover:bg-brand-warnBg disabled:opacity-60"
+                            >
+                              {deletingFailedId === s.id ? "Deleting…" : "Delete this sale (restores stock, ring it up again in Checkout)"}
+                            </button>
+                          )}
                         </div>
                       )}
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
