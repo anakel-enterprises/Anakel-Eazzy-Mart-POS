@@ -115,7 +115,24 @@ export function Inventory() {
     return ids;
   }, [pendingCreates, pendingEdits, pendingAdjustments]);
 
+  // A "pending" change is still waiting for connectivity and will finish on
+  // its own — an "error" change already reached the server and was rejected
+  // every retry so far (e.g. a SKU collision), so it will keep failing
+  // identically forever until someone edits it, no matter how long the
+  // device stays online. The two used to render as one indistinguishable
+  // "SYNCING" badge, which is why a product stuck on a real, permanent error
+  // could sit invisible to every other device for days while this device's
+  // own UI kept reassuring the cashier it would "sync automatically."
+  const failedProductErrors = useMemo(() => {
+    const errors = new Map<string, string>();
+    for (const p of pendingCreates) if (p.syncStatus === "error") errors.set(p.clientId, p.syncError ?? "Failed to sync");
+    for (const e of pendingEdits) if (e.syncStatus === "error") errors.set(e.productId, e.syncError ?? "Failed to sync");
+    for (const a of pendingAdjustments) if (a.syncStatus === "error") errors.set(a.productId, a.syncError ?? "Failed to sync");
+    return errors;
+  }, [pendingCreates, pendingEdits, pendingAdjustments]);
+
   const pendingCount = pendingCreates.length + pendingEdits.length + pendingAdjustments.length;
+  const failedCount = failedProductErrors.size;
 
   const filteredProducts = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -163,10 +180,18 @@ export function Inventory() {
     <>
       <Topbar title="Inventory" subtitle={`${products.length} products`} />
       <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 sm:p-6 lg:p-8">
-        {pendingCount > 0 && (
+        {pendingCount - failedCount > 0 && (
           <div className="rounded-lg bg-brand-accent/10 px-3 py-2 text-sm font-medium text-brand-accentText">
-            Includes {pendingCount} product change{pendingCount === 1 ? "" : "s"} made on this device that {pendingCount === 1 ? "hasn't" : "haven't"}{" "}
-            synced yet — they'll finish syncing automatically once you're back online.
+            Includes {pendingCount - failedCount} product change{pendingCount - failedCount === 1 ? "" : "s"} made on this device that{" "}
+            {pendingCount - failedCount === 1 ? "hasn't" : "haven't"} synced yet — they'll finish syncing automatically once you're back online.
+          </div>
+        )}
+        {failedCount > 0 && (
+          <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+            {failedCount} product change{failedCount === 1 ? "" : "s"} on this device {failedCount === 1 ? "has" : "have"} been rejected by the
+            server every time it retried — {failedCount === 1 ? "it" : "they"} will keep failing until you fix{" "}
+            {failedCount === 1 ? "it" : "them"} (look for the red "SYNC FAILED" tag below for the reason) and won't show up on any other device
+            until then.
           </div>
         )}
 
@@ -284,13 +309,22 @@ export function Inventory() {
                   />
                   <span className="flex min-w-0 items-center gap-1.5 font-semibold text-brand-ink">
                     <span className="truncate">{p.name}</span>
-                    {pendingProductIds.has(p.id) && (
+                    {failedProductErrors.has(p.id) ? (
                       <span
-                        title="Not yet synced to the server"
-                        className="shrink-0 rounded-full bg-brand-accent/20 px-1.5 py-0.5 text-[10px] font-bold text-brand-accentText"
+                        title={`Sync failed, and will keep failing until this is fixed: ${failedProductErrors.get(p.id)}`}
+                        className="shrink-0 rounded-full bg-brand-warnBg px-1.5 py-0.5 text-[10px] font-bold text-brand-warn"
                       >
-                        SYNCING
+                        SYNC FAILED
                       </span>
+                    ) : (
+                      pendingProductIds.has(p.id) && (
+                        <span
+                          title="Not yet synced to the server — will finish automatically once online"
+                          className="shrink-0 rounded-full bg-brand-accent/20 px-1.5 py-0.5 text-[10px] font-bold text-brand-accentText"
+                        >
+                          SYNCING
+                        </span>
+                      )
                     )}
                   </span>
                   <span className="text-brand-inkMuted">{p.sku}</span>
@@ -333,6 +367,7 @@ export function Inventory() {
         <ProductDetailModal
           product={detailProduct}
           categories={categories}
+          syncError={failedProductErrors.get(detailProduct.id)}
           onClose={() => setDetailProduct(null)}
           onSaved={() => {}}
         />
