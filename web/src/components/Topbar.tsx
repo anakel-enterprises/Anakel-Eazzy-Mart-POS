@@ -4,12 +4,17 @@ import { localDb } from "../db/localDb";
 import { flushPendingSales } from "../lib/sync";
 import { isApiReachable } from "../lib/api";
 import { useSidebar } from "../context/SidebarContext";
+import { useAuth } from "../context/AuthContext";
+import { FailedSalesModal } from "./FailedSalesModal";
 
 const REACHABILITY_CHECK_MS = 15_000;
 
 export function Topbar({ title, subtitle }: { title: string; subtitle?: string }) {
   const [reachable, setReachable] = useState(true);
   const { toggle } = useSidebar();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+  const [showFailedModal, setShowFailedModal] = useState(false);
   const pendingCount = useLiveQuery(() => localDb.pendingSales.where("syncStatus").equals("pending").count(), [], 0);
   const errorCount = useLiveQuery(() => localDb.pendingSales.where("syncStatus").equals("error").count(), [], 0);
 
@@ -65,13 +70,21 @@ export function Topbar({ title, subtitle }: { title: string; subtitle?: string }
         )}
         {errorCount > 0 && (
           <button
-            onClick={() => void flushPendingSales()}
+            // Admin: opens the actual list of failed sales (who, what,
+            // why) instead of blindly retrying with zero visible feedback
+            // either way — a permanent failure looks identical to a no-op
+            // when all you get back is silence. A non-admin still just
+            // retries directly, same as before: they can't see other
+            // employees' sales here (see FailedSalesModal) or fix/delete
+            // anything, so there's nothing more useful to show them.
+            onClick={() => (isAdmin ? setShowFailedModal(true) : void flushPendingSales())}
             className="rounded-full bg-brand-warnBg px-3 py-1 text-xs font-semibold text-brand-warn"
           >
-            {errorCount} sale{errorCount === 1 ? "" : "s"} failed to sync — tap to retry
+            {errorCount} sale{errorCount === 1 ? "" : "s"} failed to sync — {isAdmin ? "tap to view" : "tap to retry"}
           </button>
         )}
       </div>
+      {showFailedModal && <FailedSalesModal onClose={() => setShowFailedModal(false)} />}
     </div>
   );
 }
