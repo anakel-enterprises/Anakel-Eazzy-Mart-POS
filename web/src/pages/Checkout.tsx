@@ -61,6 +61,11 @@ function toDatetimeLocalValue(d: Date): string {
 export function Checkout() {
   const [query, setQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Wraps the search box + its results list — a click landing outside this
+  // (but not one of the result buttons themselves, which already clear
+  // nothing and just add to cart) is how the cashier dismisses the list
+  // once they're done adding every variant they needed from one search.
+  const searchAreaRef = useRef<HTMLDivElement>(null);
   // Belt-and-suspenders against a double-tap on "Save & select" (easy to do
   // on a touchscreen till) firing createCustomerInline twice before React
   // commits the `creatingCustomer`-disabled state — each call would
@@ -195,6 +200,20 @@ export function Checkout() {
       .slice(0, 50);
   }, [query]);
 
+  // Clicking anywhere outside the search box + its results list dismisses
+  // the list — the other way it can close now that adding an item no
+  // longer clears the query itself (see addToCart).
+  useEffect(() => {
+    if (!query) return;
+    function handlePointerDown(e: MouseEvent) {
+      if (searchAreaRef.current && !searchAreaRef.current.contains(e.target as Node)) {
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [query]);
+
   const heldSales = useLiveQuery(() => localDb.heldSales.orderBy("createdAt").reverse().toArray(), [], []);
 
   const subtotal = useMemo(() => cart.reduce((sum, l) => sum + l.product.price * l.quantity, 0), [cart]);
@@ -228,7 +247,13 @@ export function Checkout() {
       }
       return [...prev, { product, quantity: 1 }];
     });
-    setQuery("");
+    // Deliberately leaves the query (and therefore the results list) alone
+    // — a search for something like "Delamere" often matches several
+    // variants a customer is buying more than one of, and clearing it back
+    // to nothing after every single click forced re-typing the same search
+    // for each additional variant. The list now only closes when the
+    // cashier explicitly dismisses it (clicking outside it, or the search
+    // box's own ✕) — see the click-outside effect below.
     refocusSearch();
   }
 
@@ -515,49 +540,51 @@ export function Checkout() {
       <Topbar title="Checkout" subtitle="Search by name, SKU, or barcode" />
       <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6 lg:grid lg:grid-cols-[1.3fr_1fr] lg:overflow-hidden lg:p-8">
         <div className="flex flex-col gap-4 lg:overflow-hidden">
-          <div className="flex flex-wrap gap-2">
-            <ClearableInput
-              ref={searchInputRef}
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onClear={() => setQuery("")}
-              placeholder="Search products, orders… or scan a barcode"
-              wrapperClassName="min-w-[200px] flex-1"
-              className="w-full rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
-            />
-            <Button variant="secondary" onClick={() => setShowScanner(true)}>
-              Scan
-            </Button>
-            <Button variant="secondary" onClick={() => setShowHeld(true)} className="relative">
-              Held sales
-              {heldSales.length > 0 && (
-                <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-warn text-[10px] font-bold text-white">
-                  {heldSales.length}
-                </span>
-              )}
-            </Button>
-          </div>
-          {results && results.length > 0 && (
-            <Card className="flex max-h-80 flex-col gap-1 overflow-y-auto p-2">
-              {results.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => addToCart(p)}
-                  className="flex items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-brand-bg"
-                >
-                  <div>
-                    <div className="text-sm font-semibold text-brand-ink">{p.name}</div>
-                    <div className={`text-xs ${p.stockQty <= 0 ? "font-semibold text-brand-warn" : "text-brand-inkMuted"}`}>
-                      {p.sku} ·{" "}
-                      {p.stockQty > 0 ? `${p.stockQty} in stock` : p.stockQty === 0 ? "Out of stock" : `${-p.stockQty} on backorder`}
+          <div ref={searchAreaRef} className="flex flex-col gap-4">
+            <div className="flex flex-wrap gap-2">
+              <ClearableInput
+                ref={searchInputRef}
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onClear={() => setQuery("")}
+                placeholder="Search products, orders… or scan a barcode"
+                wrapperClassName="min-w-[200px] flex-1"
+                className="w-full rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
+              />
+              <Button variant="secondary" onClick={() => setShowScanner(true)}>
+                Scan
+              </Button>
+              <Button variant="secondary" onClick={() => setShowHeld(true)} className="relative">
+                Held sales
+                {heldSales.length > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-brand-warn text-[10px] font-bold text-white">
+                    {heldSales.length}
+                  </span>
+                )}
+              </Button>
+            </div>
+            {results && results.length > 0 && (
+              <Card className="flex max-h-80 flex-col gap-1 overflow-y-auto p-2">
+                {results.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => addToCart(p)}
+                    className="flex items-center justify-between rounded-lg px-3 py-2 text-left hover:bg-brand-bg"
+                  >
+                    <div>
+                      <div className="text-sm font-semibold text-brand-ink">{p.name}</div>
+                      <div className={`text-xs ${p.stockQty <= 0 ? "font-semibold text-brand-warn" : "text-brand-inkMuted"}`}>
+                        {p.sku} ·{" "}
+                        {p.stockQty > 0 ? `${p.stockQty} in stock` : p.stockQty === 0 ? "Out of stock" : `${-p.stockQty} on backorder`}
+                      </div>
                     </div>
-                  </div>
-                  <span className="text-sm font-semibold text-brand-ink">{currencyFmt.format(p.price)}</span>
-                </button>
-              ))}
-            </Card>
-          )}
+                    <span className="text-sm font-semibold text-brand-ink">{currencyFmt.format(p.price)}</span>
+                  </button>
+                ))}
+              </Card>
+            )}
+          </div>
 
           <Card className="lg:flex-1 lg:overflow-auto">
             <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Cart</div>
