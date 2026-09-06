@@ -260,17 +260,18 @@ export function Checkout() {
   // Live-updates a line's quantity (and therefore the cart subtotal/total)
   // without moving focus — used while a quantity is still being typed, so
   // the total visibly keeps pace with each keystroke instead of only
-  // catching up once the field is committed.
+  // catching up once the field is committed. Every caller already floors at
+  // 1 (the "−" button) or discards anything below it (typed edits) —
+  // removing a line on purpose is the ✕ button's job alone, via
+  // removeFromCart below, so this never needs to.
   function setLineQuantity(productId: string, quantity: number) {
-    setCart((prev) =>
-      quantity <= 0 ? prev.filter((l) => l.product.id !== productId) : prev.map((l) => (l.product.id === productId ? { ...l, quantity } : l))
-    );
+    setCart((prev) => prev.map((l) => (l.product.id === productId ? { ...l, quantity } : l)));
   }
 
-  // The +/− buttons, the ✕ button, and a committed (blur/Enter) quantity
-  // edit — every *discrete, done-now* way to change a line's quantity —
-  // go through this instead of setLineQuantity directly, so the search
-  // field reliably gets focus back afterwards for the next scan.
+  // The +/− buttons and a committed (blur/Enter) quantity edit — every
+  // *discrete, done-now* way to change a line's quantity — go through this
+  // instead of setLineQuantity directly, so the search field reliably gets
+  // focus back afterwards for the next scan.
   function updateQuantity(productId: string, quantity: number) {
     setLineQuantity(productId, quantity);
     refocusSearch();
@@ -488,9 +489,33 @@ export function Checkout() {
     setMpesaStatus("failed");
   }
 
+  // A scanned code is exact by nature — either it matches one product's
+  // barcode/SKU outright, or it doesn't. Used by both the camera scanner
+  // (handleScan below) and a physical USB/Bluetooth scanner, which just
+  // types the code into whatever's focused (almost always this search box,
+  // since refocusSearch keeps it that way) followed by Enter — see the
+  // search input's onKeyDown. Re-scanning the same item again just calls
+  // addToCart again, which already merges into the existing line and bumps
+  // its quantity, so "scan it twice for two" needs no extra handling here.
+  async function addScannedProduct(value: string) {
+    const code = value.trim();
+    if (!code) return;
+    const all = await localDb.products.toArray();
+    const exact = all.find((p) => (p.barcode && p.barcode === code) || p.sku.toLowerCase() === code.toLowerCase());
+    if (exact) {
+      addToCart(exact);
+      setQuery("");
+      return;
+    }
+    // No exact match — fall back to the ordinary fuzzy search (matches
+    // partial name/SKU/barcode too) so the cashier can still find and tap
+    // it themselves, e.g. if the barcode wasn't recorded on the product.
+    setQuery(code);
+  }
+
   function handleScan(value: string) {
     setShowScanner(false);
-    setQuery(value);
+    void addScannedProduct(value);
   }
 
   function updateSplitRow(index: number, patch: Partial<SplitPaymentEntry>) {
@@ -548,6 +573,12 @@ export function Checkout() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onClear={() => setQuery("")}
+                // A physical USB/Bluetooth barcode scanner acts like a
+                // keyboard: it types the code into whatever's focused (this
+                // box, almost always) and sends Enter — see addScannedProduct.
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void addScannedProduct(query);
+                }}
                 placeholder="Search products, orders… or scan a barcode"
                 wrapperClassName="min-w-[200px] flex-1"
                 className="w-full rounded-[10px] border border-brand-border bg-white px-4 py-3 text-sm outline-none focus:border-brand-accentDeep"
@@ -605,7 +636,13 @@ export function Checkout() {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => updateQuantity(line.product.id, line.quantity - 1)}
+                      // Floors at 1 rather than letting the line hit 0 and
+                      // silently vanish — a cashier tapping "−" one time too
+                      // many on a single-quantity line used to delete it
+                      // outright with no confirmation, forcing a re-search to
+                      // put it back. Removing a line on purpose is what the
+                      // ✕ button next to it is for.
+                      onClick={() => updateQuantity(line.product.id, Math.max(1, line.quantity - 1))}
                       className="h-7 w-7 rounded-md bg-white text-brand-ink shadow-card"
                     >
                       −
