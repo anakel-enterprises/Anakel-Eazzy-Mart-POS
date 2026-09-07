@@ -74,8 +74,8 @@ export interface SaleHistoryItem {
   id: string;
   // Absent for the offline/unsynced overlay rows, which reuse `id` as a
   // productId stand-in since there's no real SaleItem yet (see the
-  // SaleHistoryRow.refunds comment) — refunding is disabled for those rows
-  // anyway, but callers that need to tell the two apart can check this.
+  // SaleHistoryRow.refunds comment) — RefundModal falls back to `id` for
+  // these (see `item.productId ?? item.id`), since it's the same value.
   productId?: string;
   name: string;
   quantity: number;
@@ -128,8 +128,9 @@ export interface SaleHistoryRow {
   // Every refund ever processed against this sale. Undefined (not just
   // empty) for a sale still sitting in this device's unsynced-sales overlay
   // — it can't have any refunds yet since the sale itself hasn't reached
-  // the server, which is also exactly why refunding is disabled for those
-  // rows (see the `refunds === undefined` checks at the call sites).
+  // the server. RefundModal checks this to tell the two cases apart: an
+  // unsynced sale is refunded by shrinking what's still queued to sync
+  // (refundPendingSale) rather than recording a refund server-side.
   refunds?: RefundRow[];
   // Set only for an offline-overlay row whose sync has actually been
   // rejected by the server on every retry so far (as opposed to merely

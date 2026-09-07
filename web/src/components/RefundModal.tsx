@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb } from "../db/localDb";
-import { queueRefund } from "../lib/sync";
+import { queueRefund, refundPendingSale } from "../lib/sync";
 import type { SaleHistoryRow } from "../types/reports";
 import { Button, Card } from "./ui";
 
@@ -29,10 +29,13 @@ interface RefundModalProps {
 // item can only be refunded up to what hasn't already come back on an
 // earlier visit (see `remaining` below), and money can go back as cash,
 // M-Pesa, or — only when this sale actually has a customer — knocked
-// straight off their credit balance instead of handed over. Submits via
-// queueRefund (write-locally-first, same as ringing up a sale), so this
-// works with zero connectivity — stock is restored on this device
-// immediately, and the server-side record follows once it can sync.
+// straight off their credit balance instead of handed over. Works with zero
+// connectivity: an already-synced sale is refunded via queueRefund
+// (write-locally-first, same as ringing up a sale) — stock is restored on
+// this device immediately, and the server-side record follows once it can
+// sync. A sale still sitting unsynced in this device's own queue has no
+// server-side record to refund yet, so it goes through refundPendingSale
+// instead, which just shrinks what's queued to sync.
 export function RefundModal({ sale, onClose, onRefunded }: RefundModalProps) {
   // Refunds already queued against this exact sale on this device but not
   // yet confirmed synced — without this, closing and reopening the modal
@@ -98,17 +101,28 @@ export function RefundModal({ sale, onClose, onRefunded }: RefundModalProps) {
     setSubmitting(true);
     setError(null);
     try {
-      await queueRefund({
-        saleId: sale.id,
-        customerId: sale.customerId ?? undefined,
-        items,
-        method,
-        reason: reason.trim() || undefined,
-      });
+      if (sale.refunds === undefined) {
+        // Still sitting in this device's queue, never reached the server —
+        // shrink what's queued to sync instead of recording a refund
+        // against a sale the server doesn't know exists yet.
+        const result = await refundPendingSale(
+          sale.id,
+          items.map((i) => ({ productId: i.productId, quantity: i.quantity }))
+        );
+        if (!result.ok) throw new Error(result.message);
+      } else {
+        await queueRefund({
+          saleId: sale.id,
+          customerId: sale.customerId ?? undefined,
+          items,
+          method,
+          reason: reason.trim() || undefined,
+        });
+      }
       onRefunded();
       onClose();
-    } catch {
-      setError("Couldn't save this refund on this device — try again.");
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : "Couldn't save this refund on this device — try again.");
       setSubmitting(false);
     }
   }

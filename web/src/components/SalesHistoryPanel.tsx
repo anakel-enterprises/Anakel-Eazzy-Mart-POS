@@ -182,6 +182,12 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
     return [...overlay, ...sales].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [sales, unsyncedSales, isOwnHistory, paymentFilter, user?.id]);
 
+  // A fetch failure (typically: genuinely offline, and this device has never
+  // fetched — so never cached — this exact query before) shouldn't hide the
+  // sales sitting right there in this device's own local queue. Only treat
+  // it as a hard error when there's truly nothing local to fall back to.
+  const showData = !error || mergedSales.length > 0;
+
   // Groups the (already newest-first) sales history into per-day sections —
   // a long-tenured employee's "complete history" can span months, so a
   // calendar picker below jumps straight to a day instead of scrolling
@@ -310,7 +316,20 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
         </div>
       )}
 
-      {isAdmin && !loading && !error && paymentTotals.length > 0 && (
+      {/* A fetch failure with nothing at all cached yet (e.g. this device has
+          never opened its own sales history while online before going
+          offline) would otherwise hide even the sales sitting right there in
+          this device's local queue — showData falls back to those instead of
+          blanking the whole panel whenever there's at least something local
+          to show. */}
+      {error && mergedSales.length > 0 && (
+        <div className="rounded-lg bg-brand-warnBg px-3 py-2 text-sm font-medium text-brand-warn">
+          Offline, and this device has no saved copy of your sales history yet — showing only what you've sold on this
+          device since. Will update automatically once you're back online.
+        </div>
+      )}
+
+      {isAdmin && !loading && showData && paymentTotals.length > 0 && (
         <div className="flex flex-col gap-2 border-b border-brand-border pb-3">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-brand-inkMuted">
             Payment totals — {activeDay?.dayLabel}
@@ -331,9 +350,9 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
         </div>
       )}
 
-      {error && <div className="text-sm font-medium text-brand-warn">{error}</div>}
-      {!error && loading && <div className="text-sm text-brand-inkMuted">Loading…</div>}
-      {!error && !loading && activeDay && (
+      {error && mergedSales.length === 0 && <div className="text-sm font-medium text-brand-warn">{error}</div>}
+      {showData && loading && <div className="text-sm text-brand-inkMuted">Loading…</div>}
+      {showData && !loading && activeDay && (
         <div className="overflow-x-auto">
           <div className="min-w-[600px]">
             <div className="mb-1.5 flex items-baseline gap-2 rounded-md bg-brand-bg px-2 py-1.5">
@@ -372,12 +391,14 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
               const netTotal = Number(s.total) - pendingRefundedTotal;
               const refundedTotal = syncedRefundedTotal + pendingRefundedTotal;
               const originalTotal = Number(s.total) + syncedRefundedTotal;
-              // A real, already-synced sale — the offline overlay never sets
-              // `refunds` (see the SaleHistoryRow comment), and refunding
-              // only makes sense for a still-COMPLETED sale (a VOIDED one
-              // never happened as far as revenue is concerned, and a fully
-              // REFUNDED one has nothing left to give back).
-              const canOfferRefund = canRefund && s.refunds !== undefined && s.status === "COMPLETED";
+              // Refunding only makes sense for a still-COMPLETED sale (a
+              // VOIDED one never happened as far as revenue is concerned,
+              // and a fully REFUNDED one has nothing left to give back).
+              // Works for an unsynced overlay row too (`s.refunds ===
+              // undefined`) — RefundModal shrinks what's still queued to
+              // sync instead of recording a refund against a sale the
+              // server hasn't seen yet (see refundPendingSale).
+              const canOfferRefund = canRefund && s.status === "COMPLETED";
               return (
                 <div key={s.id} className="border-b border-brand-border/60">
                   <button
@@ -478,7 +499,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
           </div>
         </div>
       )}
-      {!error && !loading && !activeDay && (
+      {showData && !loading && !activeDay && (
         <div className="py-6 text-sm text-brand-inkMuted">
           {mergedSales.length === 0
             ? `No sales${paymentFilter ? ` paid by ${PAYMENT_METHOD_LABELS[paymentFilter]}` : ""} yet.`
@@ -487,7 +508,7 @@ export function SalesHistoryPanel({ cashierId, employeeName, description, onClos
               }.`}
         </div>
       )}
-      {!error && !loading && activeDay && (
+      {showData && !loading && activeDay && (
         <div className="text-xs text-brand-inkMuted">Tap a sale to see the items sold and which customer it went to.</div>
       )}
     </Card>
