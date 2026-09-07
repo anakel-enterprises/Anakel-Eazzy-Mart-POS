@@ -371,6 +371,44 @@ async function doFlushPendingRefunds(): Promise<{ synced: number; failed: number
   return { synced, failed };
 }
 
+// A customer bringing back part of what they bought on a sale that hasn't
+// even reached the server yet — still sitting in this device's own queue
+// waiting for connectivity, so there's no server-side Sale for
+// queueRefund's POST /api/sales/:id/refund to act against (its id is only
+// a local clientId). Instead this shrinks what's actually queued to sync,
+// as if fewer units had been rung up in the first place — restoring this
+// device's cached stock the same way queueRefund does. No separate refund
+// record is needed here: the server will never see anything but the
+// (now-smaller) sale once it syncs.
+export async function refundPendingSale(
+  clientId: string,
+  items: { productId: string; quantity: number }[]
+): Promise<{ ok: boolean; message?: string }> {
+  let result: { ok: boolean; message?: string } = { ok: true };
+  await localDb.transaction("rw", localDb.pendingSales, localDb.products, async () => {
+    const row = await localDb.pendingSales.get(clientId);
+    if (!row) {
+      result = { ok: false, message: "This sale can no longer be found on this device." };
+      return;
+    }
+    if (row.syncStatus === "synced") {
+      result = { ok: false, message: "This sale has already synced — try refunding it again." };
+      return;
+    }
+    const remaining = [...row.items];
+    for (const { productId, quantity } of items) {
+      const idx = remaining.findIndex((i) => i.productId === productId);
+      if (idx === -1) continue;
+      const refundQty = Math.min(quantity, remaining[idx].quantity);
+      remaining[idx] = { ...remaining[idx], quantity: remaining[idx].quantity - refundQty };
+      const p = await localDb.products.get(productId);
+      if (p) await localDb.products.update(productId, { stockQty: p.stockQty + refundQty });
+    }
+    await localDb.pendingSales.update(clientId, { items: remaining.filter((i) => i.quantity > 0) });
+  });
+  return result;
+}
+
 export interface NewProductInput {
   name: string;
   sku: string;
