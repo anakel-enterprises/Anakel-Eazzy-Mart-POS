@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { localDb } from "../db/localDb";
 import { queueRefund, refundPendingSale } from "../lib/sync";
@@ -77,6 +77,19 @@ export function RefundModal({ sale, onClose, onRefunded }: RefundModalProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // A long item list scrolls inside its own section (see the Card's
+  // max-h-[85vh] + overflow-y-auto below) rather than pushing Cancel/Refund
+  // off the bottom of the screen with no way to reach them — Esc is the
+  // other way out, since the ✕ button can end up out of view too on a very
+  // long list before the scroll container is touched.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !submitting) onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, submitting]);
+
   const hasCustomer = !!sale.customer;
   const total = refundableItems.reduce((sum, item) => sum + (quantities[item.id] ?? 0) * Number(item.unitPrice), 0);
   const canSubmit = total > 0 && (method !== "CREDIT" || hasCustomer);
@@ -128,81 +141,98 @@ export function RefundModal({ sale, onClose, onRefunded }: RefundModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/40 p-4">
-      <Card className="w-full max-w-md">
-        <div className="mb-1 font-display text-lg font-bold text-brand-ink">Refund items</div>
+    <div
+      className="fixed inset-0 z-10 flex items-center justify-center bg-black/40 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !submitting) onClose();
+      }}
+    >
+      <Card className="flex max-h-[85vh] w-full max-w-md flex-col">
+        <div className="mb-1 flex items-start justify-between gap-3">
+          <div className="font-display text-lg font-bold text-brand-ink">Refund items</div>
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            aria-label="Close"
+            className="text-sm text-brand-inkMuted hover:text-brand-ink disabled:opacity-40"
+          >
+            ✕
+          </button>
+        </div>
         <div className="mb-4 text-sm text-brand-inkMuted">
           {sale.customer?.name ?? "Walk-in customer"} · {new Date(sale.createdAt).toLocaleDateString("en-KE", { dateStyle: "medium" })}
         </div>
 
-        {refundableItems.length === 0 ? (
-          <div className="mb-4 text-sm text-brand-inkMuted">Everything on this sale has already been refunded.</div>
-        ) : (
-          <div className="mb-4 flex flex-col gap-2.5">
-            {refundableItems.map((item) => (
-              <div key={item.id} className="flex items-center justify-between gap-3 text-sm">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium text-brand-ink">{item.name}</div>
-                  <div className="text-xs text-brand-inkMuted">
-                    {currencyFmt.format(Number(item.unitPrice))} each · {item.remaining} of {item.quantity} still returnable
+        <div className="flex-1 overflow-y-auto">
+          {refundableItems.length === 0 ? (
+            <div className="mb-4 text-sm text-brand-inkMuted">Everything on this sale has already been refunded.</div>
+          ) : (
+            <div className="mb-4 flex flex-col gap-2.5">
+              {refundableItems.map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-3 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium text-brand-ink">{item.name}</div>
+                    <div className="text-xs text-brand-inkMuted">
+                      {currencyFmt.format(Number(item.unitPrice))} each · {item.remaining} of {item.quantity} still returnable
+                    </div>
                   </div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={item.remaining}
+                    value={quantities[item.id] ?? 0}
+                    onChange={(e) => setQuantity(item.id, Number(e.target.value), item.remaining)}
+                    className="w-16 rounded-lg border border-brand-border px-2 py-1.5 text-right"
+                  />
                 </div>
+              ))}
+            </div>
+          )}
+
+          {refundableItems.length > 0 && (
+            <>
+              <div className="mb-3">
+                <span className="mb-1 block text-sm font-medium text-brand-ink">Give the money back via</span>
+                <div className="flex gap-2">
+                  {(Object.keys(METHOD_LABELS) as RefundMethod[]).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      disabled={m === "CREDIT" && !hasCustomer}
+                      onClick={() => setMethod(m)}
+                      title={m === "CREDIT" && !hasCustomer ? "This sale has no customer to credit" : undefined}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
+                        method === m ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"
+                      }`}
+                    >
+                      {METHOD_LABELS[m]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label className="mb-4 block text-sm">
+                <span className="mb-1 block font-medium text-brand-ink">Reason (optional)</span>
                 <input
-                  type="number"
-                  min={0}
-                  max={item.remaining}
-                  value={quantities[item.id] ?? 0}
-                  onChange={(e) => setQuantity(item.id, Number(e.target.value), item.remaining)}
-                  className="w-16 rounded-lg border border-brand-border px-2 py-1.5 text-right"
+                  type="text"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. changed their mind, wrong size"
+                  className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
                 />
+              </label>
+
+              <div className="mb-1 flex items-baseline justify-between text-sm">
+                <span className="font-medium text-brand-ink">Refund total</span>
+                <span className="font-display text-lg font-bold text-brand-ink">{currencyFmt.format(total)}</span>
               </div>
-            ))}
-          </div>
-        )}
+            </>
+          )}
+        </div>
 
-        {refundableItems.length > 0 && (
-          <>
-            <div className="mb-3">
-              <span className="mb-1 block text-sm font-medium text-brand-ink">Give the money back via</span>
-              <div className="flex gap-2">
-                {(Object.keys(METHOD_LABELS) as RefundMethod[]).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    disabled={m === "CREDIT" && !hasCustomer}
-                    onClick={() => setMethod(m)}
-                    title={m === "CREDIT" && !hasCustomer ? "This sale has no customer to credit" : undefined}
-                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
-                      method === m ? "bg-brand-accentDeep text-white" : "bg-brand-bg text-brand-inkMuted"
-                    }`}
-                  >
-                    {METHOD_LABELS[m]}
-                  </button>
-                ))}
-              </div>
-            </div>
+        {error && <div className="mb-3 mt-3 text-xs font-medium text-brand-warn">{error}</div>}
 
-            <label className="mb-4 block text-sm">
-              <span className="mb-1 block font-medium text-brand-ink">Reason (optional)</span>
-              <input
-                type="text"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="e.g. changed their mind, wrong size"
-                className="w-full rounded-lg border border-brand-border px-3 py-2 outline-none focus:border-brand-accentDeep"
-              />
-            </label>
-
-            <div className="mb-4 flex items-baseline justify-between text-sm">
-              <span className="font-medium text-brand-ink">Refund total</span>
-              <span className="font-display text-lg font-bold text-brand-ink">{currencyFmt.format(total)}</span>
-            </div>
-          </>
-        )}
-
-        {error && <div className="mb-3 text-xs font-medium text-brand-warn">{error}</div>}
-
-        <div className="flex gap-2">
+        <div className="mt-3 flex gap-2 border-t border-brand-border pt-3">
           <Button variant="secondary" className="flex-1" onClick={onClose} disabled={submitting}>
             Cancel
           </Button>

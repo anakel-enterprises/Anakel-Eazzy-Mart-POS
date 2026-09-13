@@ -322,26 +322,47 @@ export function Checkout() {
       id: newClientId(),
       items: cart.map((l) => ({ productId: l.product.id, name: l.product.name, quantity: l.quantity, unitPrice: l.product.price })),
       createdAt: new Date().toISOString(),
+      customer,
+      paymentMethod,
+      couponCode: couponCode || undefined,
     });
     resetPaymentState();
   }
 
+  // Each held sale is its own customer's independent transaction, not a
+  // stash of items to fold into whatever else happens to be in the cart —
+  // merging them here would silently mix two different customers' items
+  // (and charge one of them for the other's purchase). If something's
+  // already in progress when a hold is resumed, that in-progress sale is
+  // itself put on hold first (so nothing is lost — same reasoning as
+  // before, just without ever combining the two carts into one), then the
+  // selected hold loads on its own, with its own customer and payment method.
   async function resumeHeldSale(id: string) {
     const held = await localDb.heldSales.get(id);
     if (!held) return;
-    // Merges into whatever's already in the cart rather than replacing it,
-    // so resuming a hold never silently drops an in-progress sale.
-    for (const item of held.items) {
-      const product = await localDb.products.get(item.productId);
-      if (!product) continue;
-      setCart((prev) => {
-        const existing = prev.find((l) => l.product.id === product.id);
-        if (existing) {
-          return prev.map((l) => (l.product.id === product.id ? { ...l, quantity: l.quantity + item.quantity } : l));
-        }
-        return [...prev, { product, quantity: item.quantity }];
+
+    if (cart.length > 0) {
+      await localDb.heldSales.put({
+        id: newClientId(),
+        items: cart.map((l) => ({ productId: l.product.id, name: l.product.name, quantity: l.quantity, unitPrice: l.product.price })),
+        createdAt: new Date().toISOString(),
+        customer,
+        paymentMethod,
+        couponCode: couponCode || undefined,
       });
     }
+
+    const lines: CartLine[] = [];
+    for (const item of held.items) {
+      const product = await localDb.products.get(item.productId);
+      if (product) lines.push({ product, quantity: item.quantity });
+    }
+
+    resetPaymentState();
+    setCart(lines);
+    setCustomer(held.customer ?? null);
+    if (held.paymentMethod) setPaymentMethod(held.paymentMethod);
+    if (held.couponCode) setCouponCode(held.couponCode);
     await localDb.heldSales.delete(id);
     setShowHeld(false);
   }
@@ -1053,7 +1074,8 @@ export function Checkout() {
                   <div key={h.id} className="flex items-center justify-between rounded-lg bg-brand-bg px-3 py-2.5">
                     <div>
                       <div className="text-sm font-semibold text-brand-ink">
-                        {itemCount} item{itemCount === 1 ? "" : "s"} · {currencyFmt.format(heldTotal)}
+                        {h.customer?.name ?? "Walk-in customer"} · {itemCount} item{itemCount === 1 ? "" : "s"} ·{" "}
+                        {currencyFmt.format(heldTotal)}
                       </div>
                       <div className="text-xs text-brand-inkMuted">{new Date(h.createdAt).toLocaleTimeString("en-KE")}</div>
                     </div>

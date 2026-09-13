@@ -102,6 +102,14 @@ export interface HeldSale {
   items: PendingSaleItem[];
   note?: string;
   createdAt: string;
+  // Which customer (if any) and payment method were selected when this sale
+  // was put on hold — without these, resuming a hold would drop the
+  // customer back to whatever (or whoever) is currently selected in
+  // Checkout, mixing this held sale's items into an unrelated customer's
+  // in-progress one instead of keeping each hold genuinely independent.
+  customer?: { id: string; name: string; phone: string | null } | null;
+  paymentMethod?: PendingSale["paymentMethod"];
+  couponCode?: string;
 }
 
 // Last-known-good snapshot of a read-only GET response (dashboard/report
