@@ -16,6 +16,34 @@ import {
   type PendingRefundItem,
 } from "../db/localDb";
 
+// How many requests a single flush pass sends at once, instead of the one
+// request at a time it used to do — a device that's been offline for a
+// while (a full shift, a bad night's connectivity) can have dozens of
+// sales/adjustments/etc. queued, and waiting for each one's full network
+// round trip before starting the next was what actually made reconnecting
+// feel slow. Each item still succeeds or fails independently (see the
+// try/catch inside each worker below), so this never lets one item's
+// failure block another's — it only changes how many are in flight
+// together. Kept modest rather than unbounded so a big backlog doesn't
+// hammer the server (or a weak connection) with everything at once.
+const SYNC_CONCURRENCY = 4;
+
+// Runs `worker` over `items` with at most `limit` running at once. Plain
+// `Promise.all(items.map(worker))` would fire every request simultaneously
+// regardless of how many there are; this instead keeps `limit` workers
+// continuously busy, each pulling the next item off the shared queue as
+// soon as it finishes its current one.
+async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let nextIndex = 0;
+  async function runNext(): Promise<void> {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++];
+      await worker(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runNext));
+}
+
 interface ServerProduct {
   id: string;
   name: string;
@@ -185,7 +213,7 @@ async function doFlushPendingSales(): Promise<{ synced: number; failed: number }
   await flushPendingCustomers();
 
   const pending = await localDb.pendingSales.where("syncStatus").anyOf("pending", "error").toArray();
-  for (const sale of pending) {
+  await runWithConcurrency(pending, SYNC_CONCURRENCY, async (sale) => {
     try {
       const payload = {
         clientId: sale.clientId,
@@ -214,7 +242,7 @@ async function doFlushPendingSales(): Promise<{ synced: number; failed: number }
       await localDb.pendingSales.update(sale.clientId, { syncStatus: "error", syncError: message });
       failed++;
     }
-  }
+  });
 
   if (synced > 0) {
     void refreshProductCache();
@@ -332,6 +360,15 @@ export function flushPendingRefunds(): Promise<{ synced: number; failed: number 
   return refundsFlushInFlight;
 }
 
+// Deliberately still one at a time (unlike the other flush loops — see
+// runWithConcurrency/SYNC_CONCURRENCY) rather than parallelized: the
+// server's POST /:id/refund reads a sale's already-committed refunds to
+// validate "not more than what's still returnable" before writing its own,
+// with no row lock in between. Two refunds against the *same* sale — rare,
+// but possible if a device queued more than one before ever syncing — sent
+// at once could each read the same stale "already refunded" snapshot and
+// both pass a check that should have caught the second one. Sequential
+// sending is what keeps that check meaningful.
 async function doFlushPendingRefunds(): Promise<{ synced: number; failed: number }> {
   let synced = 0;
   let failed = 0;
@@ -528,7 +565,7 @@ async function doFlushPendingProducts(): Promise<{ synced: number; failed: numbe
   if (!(await isApiReachable())) return { synced: 0, failed: 0 };
 
   const pending = await localDb.pendingProducts.where("syncStatus").anyOf("pending", "error").toArray();
-  for (const p of pending) {
+  await runWithConcurrency(pending, SYNC_CONCURRENCY, async (p) => {
     try {
       const created = await api.post<{ id: string }>("/api/products", {
         clientId: p.clientId,
@@ -551,7 +588,7 @@ async function doFlushPendingProducts(): Promise<{ synced: number; failed: numbe
       await localDb.pendingProducts.update(p.clientId, { syncStatus: "error", syncError: message });
       failed++;
     }
-  }
+  });
 
   if (synced > 0) void refreshProductCache();
 
@@ -609,7 +646,7 @@ async function doFlushPendingProductEdits(): Promise<{ synced: number; failed: n
   if (!(await isApiReachable())) return { synced: 0, failed: 0 };
 
   const pending = await localDb.pendingProductEdits.where("syncStatus").anyOf("pending", "error").toArray();
-  for (const e of pending) {
+  await runWithConcurrency(pending, SYNC_CONCURRENCY, async (e) => {
     try {
       await api.put(`/api/products/${e.productId}`, {
         name: e.name,
@@ -625,7 +662,7 @@ async function doFlushPendingProductEdits(): Promise<{ synced: number; failed: n
       await localDb.pendingProductEdits.update(e.productId, { syncStatus: "error", syncError: message });
       failed++;
     }
-  }
+  });
 
   if (synced > 0) void refreshProductCache();
 
@@ -681,7 +718,7 @@ async function doFlushPendingStockAdjustments(): Promise<{ synced: number; faile
   if (!(await isApiReachable())) return { synced: 0, failed: 0 };
 
   const pending = await localDb.pendingStockAdjustments.where("syncStatus").anyOf("pending", "error").toArray();
-  for (const a of pending) {
+  await runWithConcurrency(pending, SYNC_CONCURRENCY, async (a) => {
     try {
       const payload = {
         quantityDelta: a.quantityDelta,
@@ -701,7 +738,7 @@ async function doFlushPendingStockAdjustments(): Promise<{ synced: number; faile
       await localDb.pendingStockAdjustments.update(a.clientId, { syncStatus: "error", syncError: message });
       failed++;
     }
-  }
+  });
 
   if (synced > 0) void refreshProductCache();
 
@@ -772,7 +809,7 @@ async function doFlushPendingProductDeletes(): Promise<{ synced: number; failed:
   if (!(await isApiReachable())) return { synced: 0, failed: 0 };
 
   const pending = await localDb.pendingProductDeletes.where("syncStatus").anyOf("pending", "error").toArray();
-  for (const d of pending) {
+  await runWithConcurrency(pending, SYNC_CONCURRENCY, async (d) => {
     try {
       await api.delete(`/api/products/${d.productId}`);
       await localDb.pendingProductDeletes.update(d.productId, { syncStatus: "synced" });
@@ -782,7 +819,7 @@ async function doFlushPendingProductDeletes(): Promise<{ synced: number; failed:
       await localDb.pendingProductDeletes.update(d.productId, { syncStatus: "error", syncError: message });
       failed++;
     }
-  }
+  });
 
   return { synced, failed };
 }
@@ -885,7 +922,7 @@ async function doFlushPendingCustomers(): Promise<{ synced: number; failed: numb
   if (!(await isApiReachable())) return { synced: 0, failed: 0 };
 
   const pending = await localDb.pendingCustomers.where("syncStatus").anyOf("pending", "error").toArray();
-  for (const c of pending) {
+  await runWithConcurrency(pending, SYNC_CONCURRENCY, async (c) => {
     try {
       const created = await api.post<{ id: string }>("/api/customers", {
         clientId: c.clientId,
@@ -903,7 +940,7 @@ async function doFlushPendingCustomers(): Promise<{ synced: number; failed: numb
       await localDb.pendingCustomers.update(c.clientId, { syncStatus: "error", syncError: message });
       failed++;
     }
-  }
+  });
 
   if (synced > 0) void refreshCustomerCache();
 
