@@ -99,14 +99,30 @@ export function ProductDetailModal({
         stockQty: newStockQty,
       });
     } else {
-      await queueProductEdit(product.id, {
-        name: name.trim(),
-        categoryId: categoryId || null,
-        categoryName,
-        price: priceNum,
-        cost: costNum,
-        lowStockThreshold: Number(lowStockThreshold) || 0,
-      });
+      // Queuing an edit here unconditionally used to mean a pure stock
+      // adjustment (nothing else on the form touched) queued a second,
+      // entirely no-op edit row right alongside it — one real change
+      // counted as two in every "N changes haven't synced yet" total (see
+      // Inventory's pendingCount), climbing by 2 per adjustment instead of
+      // 1. Only queue the edit when a field it actually covers changed.
+      const thresholdNum = Number(lowStockThreshold) || 0;
+      const originalCost = product.cost != null ? Number(product.cost) : undefined;
+      const fieldsChanged =
+        name.trim() !== product.name ||
+        (categoryId || null) !== (product.categoryId ?? null) ||
+        priceNum !== Number(product.price) ||
+        costNum !== originalCost ||
+        thresholdNum !== product.lowStockThreshold;
+      if (fieldsChanged) {
+        await queueProductEdit(product.id, {
+          name: name.trim(),
+          categoryId: categoryId || null,
+          categoryName,
+          price: priceNum,
+          cost: costNum,
+          lowStockThreshold: thresholdNum,
+        });
+      }
       if (deltaNum !== 0) {
         await queueStockAdjustment(product.id, deltaNum, "MANUAL_CORRECTION");
       }
