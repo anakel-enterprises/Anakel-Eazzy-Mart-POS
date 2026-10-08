@@ -157,7 +157,7 @@ reportsRouter.get(
 
     let revenue = new Prisma.Decimal(0);
     let cogs = new Prisma.Decimal(0);
-    const byProduct = new Map<string, { name: string; revenue: Prisma.Decimal; cost: Prisma.Decimal }>();
+    const byProduct = new Map<string, { name: string; revenue: Prisma.Decimal; cost: Prisma.Decimal; quantity: number }>();
 
     for (const item of items) {
       revenue = revenue.add(item.lineTotal);
@@ -169,9 +169,11 @@ reportsRouter.get(
         name: item.product.name,
         revenue: new Prisma.Decimal(0),
         cost: new Prisma.Decimal(0),
+        quantity: 0,
       };
       entry.revenue = entry.revenue.add(item.lineTotal);
       entry.cost = entry.cost.add(itemCost);
+      entry.quantity += item.quantity;
       byProduct.set(item.productId, entry);
     }
 
@@ -182,6 +184,7 @@ reportsRouter.get(
       byProduct: Array.from(byProduct.entries()).map(([productId, v]) => ({
         productId,
         name: v.name,
+        quantity: v.quantity,
         revenue: v.revenue,
         cost: v.cost,
         profit: v.revenue.sub(v.cost),
