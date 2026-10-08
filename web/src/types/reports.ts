@@ -30,7 +30,7 @@ export interface ProfitReport {
   revenue: number;
   cogs: number;
   grossProfit: number;
-  byProduct: { productId: string; name: string; revenue: number; cost: number; profit: number }[];
+  byProduct: { productId: string; name: string; quantity: number; revenue: number; cost: number; profit: number }[];
 }
 
 export interface InventoryReport {

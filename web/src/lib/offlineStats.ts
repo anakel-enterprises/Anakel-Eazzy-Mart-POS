@@ -225,7 +225,9 @@ export function overlayProfit(data: ProfitReport, sales: PendingSale[], productC
 
   let revenue = num(data.revenue);
   let cogs = num(data.cogs);
-  const byProduct = new Map(data.byProduct.map((p) => [p.productId, { name: p.name, revenue: num(p.revenue), cost: num(p.cost) }]));
+  const byProduct = new Map(
+    data.byProduct.map((p) => [p.productId, { name: p.name, quantity: p.quantity, revenue: num(p.revenue), cost: num(p.cost) }])
+  );
 
   for (const sale of sales) {
     for (const item of sale.items) {
@@ -234,7 +236,8 @@ export function overlayProfit(data: ProfitReport, sales: PendingSale[], productC
       revenue += lineRevenue;
       cogs += lineCost;
 
-      const entry = byProduct.get(item.productId) ?? { name: item.name, revenue: 0, cost: 0 };
+      const entry = byProduct.get(item.productId) ?? { name: item.name, quantity: 0, revenue: 0, cost: 0 };
+      entry.quantity += item.quantity;
       entry.revenue += lineRevenue;
       entry.cost += lineCost;
       byProduct.set(item.productId, entry);
@@ -248,6 +251,7 @@ export function overlayProfit(data: ProfitReport, sales: PendingSale[], productC
     byProduct: Array.from(byProduct.entries()).map(([productId, v]) => ({
       productId,
       name: v.name,
+      quantity: v.quantity,
       revenue: v.revenue,
       cost: v.cost,
       profit: v.revenue - v.cost,

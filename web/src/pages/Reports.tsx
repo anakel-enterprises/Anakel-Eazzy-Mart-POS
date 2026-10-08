@@ -502,8 +502,8 @@ export function Reports() {
                   displayProfit &&
                   downloadCsv(
                     "profit-by-product.csv",
-                    ["Product", "Revenue (KSh)", "Cost (KSh)", "Profit (KSh)"],
-                    displayProfit.byProduct.map((p) => [p.name, p.revenue, p.cost, p.profit])
+                    ["Product", "Qty Sold", "Revenue (KSh)", "Cost (KSh)", "Profit (KSh)"],
+                    displayProfit.byProduct.map((p) => [p.name, p.quantity, p.revenue, p.cost, p.profit])
                   )
                 }
               >
@@ -528,16 +528,18 @@ export function Reports() {
               <div className="mb-3 font-display text-[15px] font-bold text-brand-ink">Profit by product</div>
               <div className="overflow-x-auto">
                 <div className="min-w-[420px]">
-                  <div className="grid grid-cols-[2fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
+                  <div className="grid grid-cols-[2fr_1fr_1fr_1fr] border-b border-brand-border pb-2 text-[11.5px] font-semibold text-brand-inkMuted">
                     <span>PRODUCT</span>
+                    <span>QTY SOLD</span>
                     <span>REVENUE</span>
                     <span>PROFIT</span>
                   </div>
                   {displayProfit?.byProduct
                     .sort((a, b) => b.profit - a.profit)
                     .map((p) => (
-                      <div key={p.productId} className="grid grid-cols-[2fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
+                      <div key={p.productId} className="grid grid-cols-[2fr_1fr_1fr_1fr] items-center border-b border-brand-border/60 py-2 text-sm">
                         <span className="font-semibold text-brand-ink">{p.name}</span>
+                        <span className="text-brand-inkMuted">{p.quantity}</span>
                         <span className="text-brand-inkMuted">{currencyFmt.format(p.revenue)}</span>
                         <span className="font-semibold text-brand-accentText">{currencyFmt.format(p.profit)}</span>
                       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getCached } from "../lib/cachedFetch";
 import { isApiReachable } from "../lib/api";
@@ -67,6 +67,12 @@ export function Inventory() {
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [query, setQuery] = useState("");
+  // Lets the search box reclaim focus after adding a product or saving
+  // changes in the detail modal — same pattern as Checkout returning focus
+  // to its own product search after ringing up an item, so a cashier
+  // working through several products in a row can keep typing without
+  // reaching for the mouse each time.
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState<string | null>(null);
@@ -174,6 +180,7 @@ export function Inventory() {
     setForm(emptyForm);
     setSkuTouched(false);
     setShowForm(false);
+    searchInputRef.current?.focus();
   }
 
   return (
@@ -197,6 +204,7 @@ export function Inventory() {
 
         <div className="flex flex-wrap items-center gap-3">
           <ClearableInput
+            ref={searchInputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onClear={() => setQuery("")}
@@ -369,7 +377,7 @@ export function Inventory() {
           categories={categories}
           syncError={failedProductErrors.get(detailProduct.id)}
           onClose={() => setDetailProduct(null)}
-          onSaved={() => {}}
+          onSaved={() => searchInputRef.current?.focus()}
         />
       )}
 
