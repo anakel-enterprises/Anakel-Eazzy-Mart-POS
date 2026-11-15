@@ -280,7 +280,17 @@ class LocalDb extends Dexie {
   pendingRefunds!: Table<PendingRefund, string>;
 
   constructor() {
-    super("anakel-pos");
+    // Chrome 121 quietly changed IndexedDB's default write durability from
+    // "strict" to "relaxed" for performance — under "relaxed", a write's
+    // Promise can resolve (the sale shows as rung up, the cart clears)
+    // before the data has actually been flushed to disk, so a real power
+    // cut in that gap loses it even though the app already confirmed
+    // success. This is a POS: a cashier rings up a sale and the till can
+    // lose power with zero warning, so every write here opts back into
+    // "strict" — the old, slower-but-durable behavior — rather than
+    // accept that tradeoff for speed. Chrome-specific; harmlessly ignored
+    // by every other browser (see Dexie's ChromeTransactionDurability).
+    super("anakel-pos", { chromeTransactionDurability: "strict" });
     this.version(1).stores({
       products: "id, name, sku, barcode",
       pendingSales: "clientId, syncStatus, createdAt",
